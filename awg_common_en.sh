@@ -56,7 +56,15 @@ get_main_nic() {
     ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}'
 }
 
-# Detect server public IP (with caching)
+# Detect server public IP (with caching).
+#
+# The 6-service list covers common NAT and cloud scenarios.
+# checkip.amazonaws.com is added for AWS / GCP / OCI: on an instance
+# behind a NAT Gateway some services may rate-limit, while the AWS
+# endpoint stays reachable even from a VPC private subnet.
+# ifconfig.io is an alternative to ifconfig.me for downtime cases.
+# Order: AWS service first (most reliable in cloud), then by uptime SLA.
+# First-wins: when one service returns a valid IP, the rest are skipped.
 _CACHED_PUBLIC_IP=""
 get_server_public_ip() {
     if [[ -n "$_CACHED_PUBLIC_IP" ]]; then
@@ -64,7 +72,14 @@ get_server_public_ip() {
         return 0
     fi
     local ip="" svc
-    for svc in https://ifconfig.me https://api.ipify.org https://icanhazip.com https://ipinfo.io/ip; do
+    for svc in \
+        https://checkip.amazonaws.com \
+        https://ifconfig.me \
+        https://api.ipify.org \
+        https://icanhazip.com \
+        https://ipinfo.io/ip \
+        https://ifconfig.io
+    do
         ip=$(curl -4 -sf --max-time 5 "$svc" 2>/dev/null | tr -d '[:space:]')
         if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             _CACHED_PUBLIC_IP="$ip"

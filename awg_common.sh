@@ -57,6 +57,15 @@ get_main_nic() {
 }
 
 # Определение внешнего IP-адреса сервера (с кэшированием)
+#
+# Список 6 сервисов покрывает основные NAT и cloud-сценарии.
+# checkip.amazonaws.com добавлен для AWS / GCP / OCI: на инстансе
+# за NAT-Gateway отдельные сервисы могут rate-limit'ить, а AWS
+# endpoint остаётся доступным даже из VPC private subnet.
+# ifconfig.io - альтернатива ifconfig.me на случай downtime.
+# Порядок: AWS-сервис первым (наиболее надёжен в cloud), далее
+# по убыванию uptime SLA. First-wins: при первом валидном ответе
+# остальные не запрашиваются.
 _CACHED_PUBLIC_IP=""
 get_server_public_ip() {
     if [[ -n "$_CACHED_PUBLIC_IP" ]]; then
@@ -64,7 +73,14 @@ get_server_public_ip() {
         return 0
     fi
     local ip="" svc
-    for svc in https://ifconfig.me https://api.ipify.org https://icanhazip.com https://ipinfo.io/ip; do
+    for svc in \
+        https://checkip.amazonaws.com \
+        https://ifconfig.me \
+        https://api.ipify.org \
+        https://icanhazip.com \
+        https://ipinfo.io/ip \
+        https://ifconfig.io
+    do
         ip=$(curl -4 -sf --max-time 5 "$svc" 2>/dev/null | tr -d '[:space:]')
         if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             _CACHED_PUBLIC_IP="$ip"
