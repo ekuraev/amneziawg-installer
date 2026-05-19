@@ -113,16 +113,17 @@
 
 # ---------- Version markers ----------
 
-@test "v5.13.0: SCRIPT_VERSION bumped in installer + manage scripts" {
+@test "SCRIPT_VERSION is consistent across the four versioned scripts" {
     # install_amneziawg.sh, install_amneziawg_en.sh, manage_amneziawg.sh,
-    # manage_amneziawg_en.sh: all four were modified in v5.13.0 → version bumped.
-    for f in install_amneziawg.sh install_amneziawg_en.sh manage_amneziawg.sh manage_amneziawg_en.sh; do
-        run grep -E 'SCRIPT_VERSION="5\.13\.0"' "$BATS_TEST_DIRNAME/../$f"
+    # manage_amneziawg_en.sh: all four advertise SCRIPT_VERSION; we make sure
+    # they agree (otherwise the SHA256 pins / branch tag layout will drift).
+    local ref_version
+    ref_version=$(awk -F'"' '/^SCRIPT_VERSION=/{print $2; exit}' \
+        "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
+    [[ "$ref_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+    for f in install_amneziawg_en.sh manage_amneziawg.sh manage_amneziawg_en.sh; do
+        run awk -F'"' '/^SCRIPT_VERSION=/{print $2; exit}' "$BATS_TEST_DIRNAME/../$f"
         [ "$status" -eq 0 ]
+        [ "$output" = "$ref_version" ]
     done
-    # awg_common.sh + _en.sh were NOT modified in v5.13.0 → version stays at 5.12.1.
-    run grep -E '# Версия: 5\.12\.1' "$BATS_TEST_DIRNAME/../awg_common.sh"
-    [ "$status" -eq 0 ]
-    run grep -E '# Version: 5\.12\.1' "$BATS_TEST_DIRNAME/../awg_common_en.sh"
-    [ "$status" -eq 0 ]
 }

@@ -507,7 +507,7 @@ safe_load_config() {
             fi
             case "$key" in
                 OS_ID|OS_VERSION|OS_CODENAME|AWG_PORT|AWG_TUNNEL_SUBNET|\
-                DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|\
+                DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
                 AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE)
                     export "$key=$value"
@@ -534,7 +534,7 @@ load_awg_params_from_server_conf() {
     local _Jc="" _Jmin="" _Jmax=""
     local _S1="" _S2="" _S3="" _S4=""
     local _H1="" _H2="" _H3="" _H4=""
-    local _I1="" _Port=""
+    local _I1="" _Port="" _MTU=""
 
     local in_iface=0 line key value
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -563,6 +563,7 @@ load_awg_params_from_server_conf() {
                 H4)         _H4="$value" ;;
                 I1)         _I1="$value" ;;
                 ListenPort) _Port="$value" ;;
+                MTU)        _MTU="$value" ;;
             esac
         fi
     done < "$conf"
@@ -578,6 +579,9 @@ load_awg_params_from_server_conf() {
     export AWG_H1="$_H1" AWG_H2="$_H2" AWG_H3="$_H3" AWG_H4="$_H4"
     [[ -n "$_I1"   ]] && export AWG_I1="$_I1"
     [[ -n "$_Port" ]] && export AWG_PORT="$_Port"
+    if _validate_mtu "${_MTU:-}"; then
+        export AWG_MTU="$_MTU"
+    fi
     return 0
 }
 
@@ -816,7 +820,7 @@ render_server_config() {
 [Interface]
 PrivateKey = ${server_privkey}
 Address = ${server_ip}/${subnet_mask}
-MTU = 1280
+MTU = ${AWG_MTU:-1280}
 ListenPort = ${AWG_PORT}
 PostUp = ${postup}
 PostDown = ${postdown}
@@ -848,6 +852,40 @@ EOF
     return 0
 }
 
+# Допустимый диапазон MTU для AWG / WireGuard.
+# Минимум 576 (классический минимум IPv4), максимум 9100 (verge на jumbo frame).
+# Значения вне диапазона трактуются как ошибочные и игнорируются (fallback к 1280).
+_validate_mtu() {
+    local v="$1"
+    [[ "$v" =~ ^[0-9]+$ ]] || return 1
+    (( v >= 576 && v <= 9100 )) || return 1
+    return 0
+}
+
+# Извлечение MTU из секции [Interface] серверного awg0.conf (если файл существует).
+# Печатает целое число в stdout, либо ничего если MTU не найден / файл недоступен.
+# Last-wins: если в [Interface] несколько строк MTU = ..., возвращается последняя
+# (так же как awg-quick применяет последнее присвоение).
+# Используется render_client_config для синхронизации MTU клиента с сервером
+# (баг v5.14.0: ручная правка MTU в awg0.conf не подхватывалась regen-ом).
+_extract_mtu_from_server_conf() {
+    local conf="${SERVER_CONF_FILE:-/etc/amnezia/amneziawg/awg0.conf}"
+    [[ -r "$conf" ]] || return 1
+    local val
+    val=$(awk '
+        /^\[Interface\]/ {in_iface=1; next}
+        /^\[/ {in_iface=0}
+        in_iface && /^[[:space:]]*MTU[[:space:]]*=/ {
+            gsub(/^[[:space:]]*MTU[[:space:]]*=[[:space:]]*/, "")
+            gsub(/[[:space:]].*$/, "")
+            if ($0 ~ /^[0-9]+$/) { mtu=$0 }
+        }
+        END { if (mtu != "") print mtu }
+    ' "$conf")
+    _validate_mtu "$val" || return 1
+    echo "$val"
+}
+
 # Рендер клиентского конфига AWG 2.0
 # render_client_config <name> <client_ip> <client_privkey> <server_pubkey> <endpoint> <port>
 render_client_config() {
@@ -863,6 +901,21 @@ render_client_config() {
     local conf_file="$AWG_DIR/${name}.conf"
     local allowed_ips="${ALLOWED_IPS:-0.0.0.0/0}"
 
+    # MTU: приоритет server awg0.conf > AWG_MTU из awgsetup_cfg.init > 1280 fallback.
+    # Server config - источник правды для уже работающего сервера: пользователь
+    # мог поправить MTU в /etc/amnezia/amneziawg/awg0.conf руками, и regen должен
+    # это подхватить (MyAI-sdge, Discussion #38). Невалидные значения (вне 576-9100)
+    # на любом этапе откатываются к 1280.
+    local mtu
+    mtu=$(_extract_mtu_from_server_conf) || mtu=""
+    if [[ -z "$mtu" ]]; then
+        if _validate_mtu "${AWG_MTU:-}"; then
+            mtu="$AWG_MTU"
+        else
+            mtu=1280
+        fi
+    fi
+
     local tmpfile
     tmpfile=$(awg_mktemp) || { log_error "Ошибка mktemp"; return 1; }
 
@@ -871,7 +924,7 @@ render_client_config() {
 PrivateKey = ${client_privkey}
 Address = ${client_ip}/32
 DNS = 1.1.1.1
-MTU = 1280
+MTU = ${mtu}
 Jc = ${AWG_Jc}
 Jmin = ${AWG_Jmin}
 Jmax = ${AWG_Jmax}

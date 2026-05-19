@@ -14,6 +14,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [5.14.1] - 2026-05-19
+
+**v5.14.1** - patch release: `manage regen` now picks up the MTU from the server `awg0.conf` when regenerating client configs and no longer hardcodes `1280` in the client file. No architectural changes; default behaviour (`MTU = 1280` on the server) is unchanged. Support matrix unchanged: Ubuntu 24.04 / 25.10 / 26.04, Debian 12 / 13, x86_64 + ARM (Raspberry Pi, Oracle Ampere, Hetzner CAX).
+
+### Highlights
+
+- 📐 **MTU sync between server and client configs on `regen`**. Before v5.14.1 both `awg_common.sh:render_client_config` and `render_server_config` hardcoded `MTU = 1280`. If the user hand-edited MTU in `/etc/amnezia/amneziawg/awg0.conf`, `manage_amneziawg.sh regen` still wrote the stale `1280` into the new client `.conf`. MTU resolution is now ordered: value from the `[Interface]` section of server `awg0.conf` (the source of truth for a running server), then `AWG_MTU` from `awgsetup_cfg.init`, then `1280` as fallback. The live-config parser (`load_awg_params` for AWG parameters from awg0.conf) also reads the `MTU = ...` line now and exports `AWG_MTU`. Values outside the sane range `576..9100` at any stage fall back to `1280`. Reported in Discussion [#38](https://github.com/bivlked/amneziawg-installer/discussions/38) by @E-lmedano.
+- 🔧 **Installer: `AWG_MTU` variable** in `awgsetup_cfg.init`. Fresh installs write `AWG_MTU=1280` into the config file; the user can override via environment before running the installer (`AWG_MTU=1380 sudo bash install_amneziawg.sh ...`) and the value is preserved. The variable is also added to the `safe_load_config` whitelist.
+
+### Tests
+
+**+18 new bats** (510 in the matrix, was 492 on v5.14.0):
+
+- `test_v5141_mtu_resolution.bats` (+18) - functional tests for `_extract_mtu_from_server_conf` (valid MTU from `[Interface]`, whitespace around `=`, no MTU, ignored MTU in `[Peer]`, last-wins on duplicates, missing server file, non-numeric value); functional tests for `_validate_mtu` (accepts 1280, boundary 576 and 9100, rejects 0 / -1 / 9101 / 575 / `abc` / empty); structural checks on `render_client_config` (no `MTU = 1280` hardcode, uses `${mtu}` substitution), `render_server_config` (uses `${AWG_MTU:-1280}`); `safe_load_config` whitelist contains `AWG_MTU` in all 4 files; installer writes `AWG_MTU` to `awgsetup_cfg.init` (RU + EN); byte-identical `_extract_mtu_from_server_conf` between RU and EN.
+
+### Compatibility
+
+- **Backwards-compatible** with v5.13.x and v5.14.0. Default scenario behaviour is unchanged: with `MTU = 1280` on the server, `regen` still produces `1280` in the client config.
+- **The previous workaround** (hand-editing `/root/awg/<name>.conf` after `regen`) is no longer needed - regen picks up whatever is in `awg0.conf`.
+
+### Updating
+
+From v5.13.x / v5.14.0 to v5.14.1:
+
+```bash
+wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
+sudo bash ./install_amneziawg_en.sh --force --yes
+```
+
+Step 5 of the installer pulls fresh `manage_amneziawg.sh` and `awg_common.sh` with SHA256 verification.
+
+[Full diff against v5.14.0](https://github.com/bivlked/amneziawg-installer/compare/v5.14.0...v5.14.1)
+
+---
+
 ## [5.14.0] - 2026-05-19
 
 **v5.14.0** - small feature release: more reliable public IP detection (extra fallback services for AWS / NAT'd cloud) plus a new `manage diagnose` subcommand for one-line self-troubleshooting. Backwards-compatible with v5.13.x installs; no architectural changes. Support matrix unchanged: Ubuntu 24.04 / 25.10 / 26.04, Debian 12 / 13, x86_64 + ARM (Raspberry Pi, Oracle Ampere, Hetzner CAX).
