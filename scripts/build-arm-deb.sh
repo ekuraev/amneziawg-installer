@@ -15,6 +15,64 @@
 # Output filename: amneziawg-kmod-${KERNEL_ID}_${KERNEL_VERSION}_${ARCH}.deb
 # e.g.            amneziawg-kmod-rpi-bookworm-arm64_6.12.75+rpt-rpi-v8_arm64.deb
 
+# Resolve kernel version from /lib/modules/*/build (or alt root for tests).
+# Honours KERNEL_VERSION env when set (must point at an existing build dir).
+# Otherwise auto-detects: zero candidates → fail; exactly one → use it;
+# multiple → fail explicitly and ask caller to set KERNEL_VERSION.
+# Codex / external code review (8 may 2026): the previous loop silently
+# picked the FIRST candidate, which on developer hosts with several installed
+# kernels resulted in building against an unintended target. In our CI matrix
+# each QEMU container installs exactly one headers package so the new
+# fail-on-ambiguity path never triggers there.
+# Arg $1: modules root directory (default /lib/modules), used by bats tests.
+# Stdout: resolved kernel version on success.
+# Return: 0 on success, 1 on error (message goes to stderr).
+_resolve_kernel_version() {
+    local modules_root="${1:-/lib/modules}"
+
+    if [[ -n "${KERNEL_VERSION:-}" ]]; then
+        if [[ ! -d "${modules_root}/${KERNEL_VERSION}/build" ]]; then
+            echo "ERROR: KERNEL_VERSION='${KERNEL_VERSION}' is set but ${modules_root}/${KERNEL_VERSION}/build does not exist" >&2
+            ls -la "$modules_root/" >&2 2>/dev/null || true
+            return 1
+        fi
+        echo "$KERNEL_VERSION"
+        return 0
+    fi
+
+    local _candidates=()
+    local _d
+    for _d in "$modules_root"/*/build; do
+        if [[ -d "$_d" ]]; then
+            _candidates+=("$(basename "$(dirname "$_d")")")
+        fi
+    done
+
+    case "${#_candidates[@]}" in
+        0)
+            echo "ERROR: No kernel build directory found under $modules_root/" >&2
+            ls -la "$modules_root/" >&2 2>/dev/null || true
+            return 1
+            ;;
+        1)
+            echo "${_candidates[0]}"
+            return 0
+            ;;
+        *)
+            echo "ERROR: Multiple kernel build directories found under $modules_root/:" >&2
+            printf '  - %s\n' "${_candidates[@]}" >&2
+            echo "Set KERNEL_VERSION env to disambiguate which one to build against." >&2
+            return 1
+            ;;
+    esac
+}
+
+# When sourced (e.g. by bats tests), expose helpers and skip the main body.
+# When executed directly (./build-arm-deb.sh), continue with the build flow.
+# `set -euo pipefail` is moved BELOW the source guard so it does not leak into
+# the caller's shell options when the script is sourced from tests.
+(return 0 2>/dev/null) && return 0
+
 set -euo pipefail
 
 KERNEL_ID="${KERNEL_ID:?KERNEL_ID must be set}"
@@ -26,19 +84,7 @@ echo "=== amneziawg ARM .deb builder ==="
 echo "KERNEL_ID: $KERNEL_ID"
 echo "Running as: $(uname -a)"
 
-# Resolve kernel version from installed headers (pick first with a build dir)
-KERNEL_VERSION=""
-for _d in /lib/modules/*/build; do
-    if [[ -d "$_d" ]]; then
-        KERNEL_VERSION="$(basename "$(dirname "$_d")")"
-        break
-    fi
-done
-if [[ -z "$KERNEL_VERSION" ]]; then
-    echo "ERROR: No kernel build directory found under /lib/modules/" >&2
-    ls -la /lib/modules/ >&2 2>/dev/null || true
-    exit 1
-fi
+KERNEL_VERSION="$(_resolve_kernel_version /lib/modules)"
 echo "Kernel version: $KERNEL_VERSION"
 
 ARCH="$(dpkg --print-architecture)"
