@@ -14,6 +14,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [5.14.3] - 2026-05-21
+
+**v5.14.3** - patch release with one fix: `cleanup_system()` no longer calls `apt-get autoremove` after purging `cloud-init`, which on clean Ubuntu 26.04 server in VirtualBox (subiquity, no cloud-init network management) could remove `netplan-generator` as a transitive dependency and leave the server unable to obtain an IP via DHCP after reboot. No architectural changes. Support matrix unchanged: Ubuntu 24.04 / 25.10 / 26.04, Debian 12 / 13, x86_64 + ARM.
+
+### Highlights
+
+- 🛡️ **Network stack protection in `cleanup_system`** in `install_amneziawg.sh`. Reported in [#84](https://github.com/bivlked/amneziawg-installer/issues/84) by @jay0x on a clean Ubuntu 26.04 server in VirtualBox: after the installer the server did not obtain an IP via DHCP. Root cause: an aggressive `apt-get autoremove` after `apt-get purge cloud-init` cascaded into removing `netplan-generator` as a transitive cloud-init dependency. Without `netplan-generator` the `/etc/netplan/00-installer-config.yaml` file (subiquity creates it on ISO installs) was no longer translated into `/run/systemd/network/*.network`, and `systemd-networkd` started with empty configuration. Changes in `cleanup_system()`: the `apt-get autoremove` call is dropped; before any `apt-get purge` an `apt-mark hold` is applied to critical network stack packages (`netplan.io`, `netplan-generator`, `systemd-resolved`, `netcfg`, `ifupdown`) - we first snapshot the user's existing holds via `apt-mark showhold` and only add our own hold on packages the user has not already locked (and on unhold we release strictly the ones we placed); a default-route snapshot is taken before and after cleanup - if the route is lost, the installer attempts recovery (`netplan.io` is reinstalled unconditionally, `netplan-generator` only when it is available in the archive via `apt-cache show`, so Debian 12 - which does not ship that package - does not abort the apt transaction), restart `systemd-networkd`, `netplan apply`, then a wait loop polling the route every 1-5 seconds for up to ~26 seconds; then on failure a last-ditch interface bring-up via `ip link set up`, first `networkctl renew` with a route re-check, then `dhclient -4` if needed, and only then the installer stops with a hint to restore the network from the console (`sudo dhclient -4 <iface>`) and retry the installer with `--no-tweaks`. Orphan packages now stay in the system after `purge` (~50-200 MB) - acceptable trade-off for stability; users can manually run `apt-get autoremove --no-install-recommends` after installation.
+- 🪟 **Ubuntu 26.04 whitelisted in `check_os_version`**. Previously 26.04 fell into the warning branch with an interactive prompt (passed automatically with `--yes`). Now it is recognised as a supported OS alongside 24.04 / 25.10. The release is tested on 26.04 server in VirtualBox after the Issue #84 fix.
+
+### Tests
+
+**+14 new bats** (532 planned in `bats tests/`, up from 518 on v5.14.2):
+
+- `test_v5143_cleanup_no_autoremove.bats` (+14) - functional checks via mocks of `dpkg-query`, `apt-get`, `apt-mark`, `apt-cache`, `ip`, `systemctl`, `netplan`, `networkctl`, `dhclient`, `sleep`: `apt-get autoremove` is never invoked; `apt-mark hold` fires for the netplan and systemd-resolved packages before any `purge` (without `systemd-networkd` - that is not a standalone package on Ubuntu 24+, the binary lives inside `systemd`); pre-existing user apt-mark holds are left alone (our hold/unhold cycle skips them); recovery path when default route is lost (install `netplan.io` unconditionally, `netplan-generator` only behind an `apt-cache show` gate, `netplan apply` + wait loop); last-ditch path after primary recovery fails (`ip link set up` + `networkctl renew` with a route re-check, then `dhclient -4` as fallback); `die` path on total failure with the `--no-tweaks` hint; existing cloud-init guard (three marker checks) preserved. Structural checks: RU/EN line parity of `cleanup_system`, presence of `apt-mark hold` / `unhold` / `die` in both files, absence of a real `apt-get autoremove` line (rationale comments are excluded).
+
+### Compatibility
+
+- **Backward compatible** with v5.14.x. Behaviour on cloud images that carry cloud-init markers (Hetzner, Oracle Cloud) is unchanged. ISO installs of Ubuntu 26.04 in VirtualBox now correctly handle the absence of cloud-init netplan markers.
+- The **`--no-tweaks`** workaround still works but is no longer required for the @jay0x scenario.
+
+### Upgrade
+
+From v5.14.2 to v5.14.3:
+
+```bash
+wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.3/install_amneziawg_en.sh
+sudo bash ./install_amneziawg_en.sh --force --yes
+```
+
+Step 5 of the installer pulls the latest `manage_amneziawg.sh` and `awg_common.sh` with SHA256 verification.
+
+Thanks to @jay0x for the detailed repro with `dpkg`, `journalctl`, and `ls /etc/netplan/` output - the root cause would have taken longer to pin without it.
+
+[Full list of changes since v5.14.2](https://github.com/bivlked/amneziawg-installer/compare/v5.14.2...v5.14.3)
+
+---
+
 ## [5.14.2] - 2026-05-21
 
 **v5.14.2** - patch release with two small fixes: the `.vpnuri.png` QR is now scannable with a phone camera from a computer screen (long URIs with PSK used to trigger error 900 in AmneziaVPN on iOS), and the ARM .deb build script no longer silently picks the "first" `/lib/modules/*/build` directory on hosts with multiple installed kernels. No architectural changes. Support matrix unchanged: Ubuntu 24.04 / 25.10 / 26.04, Debian 12 / 13, x86_64 + ARM.

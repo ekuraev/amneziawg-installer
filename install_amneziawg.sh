@@ -8,7 +8,7 @@ fi
 # ==============================================================================
 # Скрипт для установки и настройки AmneziaWG 2.0 на Ubuntu/Debian серверах
 # Автор: @bivlked
-# Версия: 5.14.2
+# Версия: 5.14.3
 # Дата: 2026-05-21
 # Репозиторий: https://github.com/bivlked/amneziawg-installer
 # ==============================================================================
@@ -16,7 +16,7 @@ fi
 # --- Безопасный режим и Константы ---
 set -o pipefail
 
-SCRIPT_VERSION="5.14.2"
+SCRIPT_VERSION="5.14.3"
 AWG_DIR="/root/awg"
 CONFIG_FILE="$AWG_DIR/awgsetup_cfg.init"
 STATE_FILE="$AWG_DIR/setup_state"
@@ -33,8 +33,8 @@ MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 # Проверяются в step5_download_scripts() после curl.
 # Если AWG_BRANCH переопределён (не v$SCRIPT_VERSION), проверка пропускается.
 # Формат: sha256sum output (hex, 64 chars).
-COMMON_SCRIPT_SHA256="136d4e942c97a29f83f10f5020d8de82eb6939f4fd419f508c551337521cbb80"
-MANAGE_SCRIPT_SHA256="1b8c1546828646850a87761129dd5928c2e4845626ecc9d17f912799b08881a2"
+COMMON_SCRIPT_SHA256="49431b8a20f38d1063ca0907cedd7c92d3a0dfdc67c7151aced6f235cc276e28"
+MANAGE_SCRIPT_SHA256="6e5258a70ef3abcddd2756cb6617c7d95d89b05d8519741c62311f80be07500c"
 
 # Флаги CLI
 UNINSTALL=0; HELP=0; DIAGNOSTIC=0; VERBOSE=0; NO_COLOR=0; AUTO_YES=0; NO_TWEAKS=0
@@ -372,7 +372,7 @@ check_os_version() {
     local supported=0
     case "$OS_ID" in
         ubuntu)
-            if [[ "$OS_VERSION" == "24.04" || "$OS_VERSION" == "25.10" ]]; then
+            if [[ "$OS_VERSION" == "24.04" || "$OS_VERSION" == "25.10" || "$OS_VERSION" == "26.04" ]]; then
                 supported=1
             fi
             ;;
@@ -386,7 +386,7 @@ check_os_version() {
     if [[ "$supported" -eq 1 ]]; then
         log "ОС: ${OS_ID^} $OS_VERSION ($OS_CODENAME) — поддерживается"
     else
-        log_warn "Обнаружена $OS_ID $OS_VERSION ($OS_CODENAME). Скрипт протестирован на Ubuntu 24.04/25.10 и Debian 12/13."
+        log_warn "Обнаружена $OS_ID $OS_VERSION ($OS_CODENAME). Скрипт протестирован на Ubuntu 24.04/25.10/26.04 и Debian 12/13."
         if [[ "$AUTO_YES" -eq 0 ]]; then
             read -rp "Продолжить? [y/N]: " confirm < /dev/tty
             if ! [[ "$confirm" =~ ^[Yy]$ ]]; then die "Отмена."; fi
@@ -871,6 +871,37 @@ detect_hardware() {
 cleanup_system() {
     log "Очистка системы от ненужных компонентов..."
 
+    # Снимок default route ДО очистки - для проверки что мы не сломали сеть.
+    # Issue #84: на чистой Ubuntu 26.04 server (subiquity, без cloud-init
+    # netplan-маркеров) apt-get autoremove после purge cloud-init сносил
+    # netplan-generator как transitive dep, и сервер терял IP после reboot.
+    local pre_default_route
+    pre_default_route="$(ip -4 route show default 2>/dev/null | head -1 || true)"
+    log_debug "Pre-cleanup default route: ${pre_default_route:-<none>}"
+
+    # apt-mark hold на критичные пакеты сетевого стека: защита от случайного
+    # удаления через transitive deps. Покрываем оба варианта именования netplan
+    # (netplan.io на 24.04, netplan-generator на 25.10/26.04), а также
+    # systemd-resolved и netcfg/ifupdown legacy. Пакета systemd-networkd
+    # отдельно не существует - бинарь живёт внутри systemd, hold-ить нечего.
+    # Перед hold снимаем снимок текущих hold-ов пользователя, чтобы при unhold
+    # не затереть его pre-existing holds (например на linux-image-*).
+    local _hold_pkgs="netplan.io netplan-generator systemd-resolved netcfg ifupdown"
+    local _preexisting_holds=""
+    _preexisting_holds="$(apt-mark showhold 2>/dev/null || true)"
+    local _held_actual=()
+    local _hpkg
+    for _hpkg in $_hold_pkgs; do
+        if dpkg-query -W -f='${Status}' "$_hpkg" 2>/dev/null | grep -q "ok installed"; then
+            # Пропускаем уже залоченные пользователем - их hold не наш и снимать его нельзя.
+            if grep -qxF "$_hpkg" <<<"$_preexisting_holds"; then
+                continue
+            fi
+            apt-mark hold "$_hpkg" >/dev/null 2>&1 && _held_actual+=("$_hpkg")
+        fi
+    done
+    [ ${#_held_actual[@]} -gt 0 ] && log_debug "Apt-mark hold: ${_held_actual[*]}"
+
     # Пакеты для удаления (безопасные для VPS)
     # snapd и lxd-agent-loader — только на Ubuntu, на Debian их нет
     local packages_to_remove=()
@@ -917,7 +948,71 @@ cleanup_system() {
         fi
     fi
 
-    apt-get autoremove -y 2>/dev/null || log_warn "Ошибка autoremove"
+    # apt-get autoremove убран (был источник Issue #84 на Ubuntu 26.04 ISO):
+    # autoremove зачищал netplan-generator как transitive dep cloud-init.
+    # Орфанные пакеты после purge займут ~50-200 МБ - приемлемо ради стабильности.
+    # Пользователь может вручную: apt-get autoremove --no-install-recommends.
+
+    # Снимаем hold, чтобы не оставлять "застывшие" пакеты в состоянии hold.
+    local _upkg
+    for _upkg in "${_held_actual[@]}"; do
+        apt-mark unhold "$_upkg" >/dev/null 2>&1 || true
+    done
+
+    # Проверка что default route не пропал. Если пропал - пробуем восстановить.
+    # Восстанавливаем netplan.io безусловно (есть на всех supported distro),
+    # netplan-generator - только если он реально доступен в архивах данной
+    # системы (на Debian 12 этого пакета ещё нет, apt-get install <missing>
+    # абортит транзакцию даже с || true для всей строки).
+    local post_default_route
+    post_default_route="$(ip -4 route show default 2>/dev/null | head -1 || true)"
+    if [[ -n "$pre_default_route" && -z "$post_default_route" ]]; then
+        log_error "Маршрут по умолчанию потерян после очистки. Попытка восстановления..."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            netplan.io 2>/dev/null || true
+        if apt-cache show netplan-generator &>/dev/null; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                netplan-generator 2>/dev/null || true
+        fi
+        systemctl restart systemd-networkd 2>/dev/null || true
+        netplan apply 2>/dev/null || true
+        # Цикл ожидания маршрута: до ~26 секунд, проверка раз в 1-5 секунд.
+        # Фиксированные sleep не годятся - время появления DHCP-маршрута
+        # на медленных VM непредсказуемо.
+        local _wait
+        for _wait in 1 2 3 5 5 5 5; do
+            post_default_route="$(ip -4 route show default 2>/dev/null | head -1 || true)"
+            [[ -n "$post_default_route" ]] && break
+            sleep "$_wait"
+        done
+        # Last-ditch: поднять интерфейс из pre_default_route. Сначала пробуем
+        # networkctl renew (для systemd-networkd-managed link), если маршрут не
+        # появился - переходим на dhclient (для ifupdown-managed link).
+        if [[ -z "$post_default_route" ]]; then
+            local _iface
+            _iface="$(awk '{for (i=1; i<=NF; i++) if ($i == "dev") { print $(i+1); exit } }' <<<"$pre_default_route")"
+            if [[ -n "$_iface" ]]; then
+                log_warn "Финальная попытка поднять интерфейс $_iface..."
+                ip link set "$_iface" up 2>/dev/null || true
+                if command -v networkctl &>/dev/null; then
+                    networkctl renew "$_iface" 2>/dev/null || true
+                    sleep 3
+                    post_default_route="$(ip -4 route show default 2>/dev/null | head -1 || true)"
+                fi
+                # Если networkctl не привёл маршрут к жизни (или его нет) - dhclient.
+                if [[ -z "$post_default_route" ]] && command -v dhclient &>/dev/null; then
+                    dhclient -4 "$_iface" 2>/dev/null || true
+                    sleep 3
+                    post_default_route="$(ip -4 route show default 2>/dev/null | head -1 || true)"
+                fi
+            fi
+        fi
+        if [[ -z "$post_default_route" ]]; then
+            die "Сеть не восстановилась после cleanup_system. Восстановите её с консоли (например: sudo dhclient -4 <интерфейс>) и перезапустите установщик с флагом --no-tweaks."
+        fi
+        log_warn "Сеть восстановлена: $post_default_route"
+    fi
+
     log "Очистка системы завершена."
 }
 

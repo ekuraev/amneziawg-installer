@@ -8,14 +8,14 @@ fi
 # ==============================================================================
 # AmneziaWG 2.0 installation and configuration script for Ubuntu/Debian servers
 # Author: @bivlked
-# Version: 5.14.2
+# Version: 5.14.3
 # Date: 2026-05-21
 # Repository: https://github.com/bivlked/amneziawg-installer
 # ==============================================================================
 
 # --- Safe mode and Constants ---
 set -o pipefail
-SCRIPT_VERSION="5.14.2"
+SCRIPT_VERSION="5.14.3"
 
 AWG_DIR="/root/awg"
 CONFIG_FILE="$AWG_DIR/awgsetup_cfg.init"
@@ -33,8 +33,8 @@ MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 # Verified in step5_download_scripts() after curl.
 # Verification is skipped when AWG_BRANCH is overridden (test branch).
 # Format: sha256sum output (hex, 64 chars).
-COMMON_SCRIPT_SHA256="b716db1d15b57a86d7462c434ba18331d751e609fe4db767e6a058f1303a059b"
-MANAGE_SCRIPT_SHA256="511e8722b04090bd9b7268f91e9cc8513ddf2beada8809811560b57ec2e3a0d8"
+COMMON_SCRIPT_SHA256="340ba7c4cce3be8f65b19273bcec63c11ee8a9c164629b2d35b31d45ffe9e0a8"
+MANAGE_SCRIPT_SHA256="434bff68618447d877a65c93b23bb9782f01329c943e8255a0a0acb1bc4b911a"
 
 # CLI flags
 UNINSTALL=0; HELP=0; DIAGNOSTIC=0; VERBOSE=0; NO_COLOR=0; AUTO_YES=0; NO_TWEAKS=0
@@ -377,7 +377,7 @@ check_os_version() {
     local supported=0
     case "$OS_ID" in
         ubuntu)
-            if [[ "$OS_VERSION" == "24.04" || "$OS_VERSION" == "25.10" ]]; then
+            if [[ "$OS_VERSION" == "24.04" || "$OS_VERSION" == "25.10" || "$OS_VERSION" == "26.04" ]]; then
                 supported=1
             fi
             ;;
@@ -391,7 +391,7 @@ check_os_version() {
     if [[ "$supported" -eq 1 ]]; then
         log "OS: ${OS_ID^} $OS_VERSION ($OS_CODENAME) — supported"
     else
-        log_warn "Detected $OS_ID $OS_VERSION ($OS_CODENAME). Script tested on Ubuntu 24.04/25.10 and Debian 12/13."
+        log_warn "Detected $OS_ID $OS_VERSION ($OS_CODENAME). Script tested on Ubuntu 24.04/25.10/26.04 and Debian 12/13."
         if [[ "$AUTO_YES" -eq 0 ]]; then
             read -rp "Continue? [y/N]: " confirm < /dev/tty
             if ! [[ "$confirm" =~ ^[Yy]$ ]]; then die "Cancelled."; fi
@@ -875,6 +875,37 @@ detect_hardware() {
 cleanup_system() {
     log "Cleaning system of unnecessary components..."
 
+    # Snapshot default route BEFORE cleanup - detects when we break the network.
+    # Issue #84: on clean Ubuntu 26.04 server (subiquity, no cloud-init netplan
+    # markers) apt-get autoremove after purging cloud-init removed
+    # netplan-generator as a transitive dep, and the server lost its IP on reboot.
+    local pre_default_route
+    pre_default_route="$(ip -4 route show default 2>/dev/null | head -1 || true)"
+    log_debug "Pre-cleanup default route: ${pre_default_route:-<none>}"
+
+    # apt-mark hold for critical network stack packages: defence against
+    # accidental removal via transitive deps. Covers both netplan naming
+    # variants (netplan.io on 24.04, netplan-generator on 25.10/26.04) plus
+    # systemd-resolved and netcfg/ifupdown legacy. There is no standalone
+    # systemd-networkd package - the binary lives inside systemd, nothing to hold.
+    # Before holding we snapshot the user's existing holds so we never strip
+    # holds we did not place (e.g. on linux-image-* held by the user).
+    local _hold_pkgs="netplan.io netplan-generator systemd-resolved netcfg ifupdown"
+    local _preexisting_holds=""
+    _preexisting_holds="$(apt-mark showhold 2>/dev/null || true)"
+    local _held_actual=()
+    local _hpkg
+    for _hpkg in $_hold_pkgs; do
+        if dpkg-query -W -f='${Status}' "$_hpkg" 2>/dev/null | grep -q "ok installed"; then
+            # Skip if user already held - that hold is not ours to release.
+            if grep -qxF "$_hpkg" <<<"$_preexisting_holds"; then
+                continue
+            fi
+            apt-mark hold "$_hpkg" >/dev/null 2>&1 && _held_actual+=("$_hpkg")
+        fi
+    done
+    [ ${#_held_actual[@]} -gt 0 ] && log_debug "Apt-mark hold: ${_held_actual[*]}"
+
     # Packages to remove (safe for VPS)
     # snapd and lxd-agent-loader — Ubuntu only, not present on Debian
     local packages_to_remove=()
@@ -921,7 +952,71 @@ cleanup_system() {
         fi
     fi
 
-    apt-get autoremove -y 2>/dev/null || log_warn "autoremove error"
+    # apt-get autoremove dropped (was the source of Issue #84 on Ubuntu 26.04
+    # ISO): autoremove zapped netplan-generator as a transitive dep of
+    # cloud-init. Orphans left after purge take ~50-200 MB - acceptable trade
+    # for stability. User can manually run apt-get autoremove --no-install-recommends.
+
+    # Release apt-mark holds so packages do not stay frozen for the user.
+    local _upkg
+    for _upkg in "${_held_actual[@]}"; do
+        apt-mark unhold "$_upkg" >/dev/null 2>&1 || true
+    done
+
+    # Verify default route is still present. If lost, attempt recovery.
+    # We reinstall netplan.io unconditionally (present on every supported
+    # distro). netplan-generator only ships from Ubuntu 25.10+ / Debian 13+ -
+    # gate the install behind apt-cache show so Debian 12 does not abort the
+    # transaction trying to fetch a non-existent package.
+    local post_default_route
+    post_default_route="$(ip -4 route show default 2>/dev/null | head -1 || true)"
+    if [[ -n "$pre_default_route" && -z "$post_default_route" ]]; then
+        log_error "Default route lost after cleanup. Attempting recovery..."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            netplan.io 2>/dev/null || true
+        if apt-cache show netplan-generator &>/dev/null; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                netplan-generator 2>/dev/null || true
+        fi
+        systemctl restart systemd-networkd 2>/dev/null || true
+        netplan apply 2>/dev/null || true
+        # Route-wait loop: up to ~26 seconds, polling every 1-5 seconds.
+        # Fixed sleeps are unreliable - DHCP route appearance on slow VMs is
+        # unpredictable.
+        local _wait
+        for _wait in 1 2 3 5 5 5 5; do
+            post_default_route="$(ip -4 route show default 2>/dev/null | head -1 || true)"
+            [[ -n "$post_default_route" ]] && break
+            sleep "$_wait"
+        done
+        # Last-ditch: bring up the interface from pre_default_route. Try
+        # networkctl renew first (for systemd-networkd-managed link); if the
+        # route still does not come back, fall through to dhclient (ifupdown).
+        if [[ -z "$post_default_route" ]]; then
+            local _iface
+            _iface="$(awk '{for (i=1; i<=NF; i++) if ($i == "dev") { print $(i+1); exit } }' <<<"$pre_default_route")"
+            if [[ -n "$_iface" ]]; then
+                log_warn "Last-ditch attempt to bring $_iface up..."
+                ip link set "$_iface" up 2>/dev/null || true
+                if command -v networkctl &>/dev/null; then
+                    networkctl renew "$_iface" 2>/dev/null || true
+                    sleep 3
+                    post_default_route="$(ip -4 route show default 2>/dev/null | head -1 || true)"
+                fi
+                # If networkctl did not bring the route back (or is absent) - dhclient.
+                if [[ -z "$post_default_route" ]] && command -v dhclient &>/dev/null; then
+                    dhclient -4 "$_iface" 2>/dev/null || true
+                    sleep 3
+                    post_default_route="$(ip -4 route show default 2>/dev/null | head -1 || true)"
+                fi
+            fi
+        fi
+        if [[ -z "$post_default_route" ]]; then
+            die "Network did not recover after cleanup_system. Restore it from the console (e.g. sudo dhclient -4 <iface>) and retry the installer with --no-tweaks flag."
+        fi
+        log_warn "Network recovered: $post_default_route"
+    fi
+
     log "System cleanup completed."
 }
 
