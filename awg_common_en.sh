@@ -3,8 +3,8 @@
 # ==============================================================================
 # Shared function library for AmneziaWG 2.0
 # Author: @bivlked
-# Version: 5.12.1
-# Date: 2026-05-08
+# Version: 5.14.2
+# Date: 2026-05-21
 # Repository: https://github.com/bivlked/amneziawg-installer
 # ==============================================================================
 #
@@ -1389,7 +1389,16 @@ generate_qr_vpnuri() {
         return 1
     fi
 
-    if ! qrencode -t png -o "$tmp_png" < "$uri_file"; then
+    # qrencode flags for long vpn:// URIs with PSK (issue #72):
+    #   -s 6  module size of 6 pixels instead of the default 3 - this is the real fix.
+    #         At the default scale modules were too small for the iPhone camera to
+    #         distinguish when scanning the PNG off a computer screen, producing
+    #         error 900 ImportInvalidConfigError in AmneziaVPN iOS for @haritos90
+    #         in issue #72.
+    #   -l L  lowest error correction level - this is already the qrencode default,
+    #         pinned explicitly to guard against future default changes in libqrencode.
+    #   -m 4  standard quiet zone of 4 modules - also the default, pinned explicitly.
+    if ! qrencode -t png -l L -s 6 -m 4 -o "$tmp_png" < "$uri_file"; then
         log_error "Failed to generate vpn:// QR for '$name'"
         rm -f "$tmp_png"
         return 1

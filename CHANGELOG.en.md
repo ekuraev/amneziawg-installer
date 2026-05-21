@@ -14,6 +14,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [5.14.2] - 2026-05-21
+
+**v5.14.2** - patch release with two small fixes: the `.vpnuri.png` QR is now scannable with a phone camera from a computer screen (long URIs with PSK used to trigger error 900 in AmneziaVPN on iOS), and the ARM .deb build script no longer silently picks the "first" `/lib/modules/*/build` directory on hosts with multiple installed kernels. No architectural changes. Support matrix unchanged: Ubuntu 24.04 / 25.10 / 26.04, Debian 12 / 13, x86_64 + ARM.
+
+### Highlights
+
+- 📱 **`.vpnuri.png` QR is now scannable off a screen**. `awg_common.sh:generate_qr_vpnuri` now invokes `qrencode` with an explicit `-s 6` (the previous default was `3`). This is the real fix: at the default scale the PNG modules were too small for the iPhone camera to resolve when scanning off a computer screen, which produced error 900 ImportInvalidConfigError in AmneziaVPN on iOS for @haritos90 in issue [#72](https://github.com/bivlked/amneziawg-installer/issues/72) (Debian 12 + AmneziaVPN iOS 4.8.15.4). Increasing the module scale does not change QR data capacity - it makes each module physically larger so the camera can distinguish black/white blocks reliably. The current `qrencode` defaults are also pinned explicitly: `-l L` (lowest error-correction level) and `-m 4` (standard quiet zone) - so future default changes in `libqrencode` cannot regress this fix. Pasting the text of `.vpnuri` into the app already worked; the fix restores the primary camera-scan path.
+- 🛠️ **`scripts/build-arm-deb.sh`: explicit `KERNEL_VERSION` + fail on ambiguity**. The ARM .deb builder used to pick the first matching `/lib/modules/*/build` directory through a simple loop; on developer hosts with several installed kernels this could build against an unintended target. An external code review on 8 May raised the risk. Version resolution has been extracted into a `_resolve_kernel_version` helper with three paths: when `KERNEL_VERSION` is set, the helper validates `/lib/modules/$KERNEL_VERSION/build` and uses it; otherwise it counts candidates - zero is an error (unchanged), exactly one is the unambiguous choice (unchanged), two or more produce an explicit failure that lists every found version and asks the caller to set `KERNEL_VERSION`. The AmneziaWG CI matrix is unaffected because each QEMU container installs exactly one headers package; the defensive behaviour is needed when the script runs on user hosts.
+
+### Tests
+
+**+18 new bats** (528 total, up from 510 on v5.14.1):
+
+- `test_v5142_qr_high_density.bats` (+7) - asserts that `qrencode` receives `-l L`, `-s 6`, `-m 4`, that `-t png` is still passed, regression check that the PNG file is still produced from the `.vpnuri` payload, and byte-identical parity of the invocation line between RU and EN.
+- `test_v5142_build_arm_deb.bats` (+11) - functional tests for `_resolve_kernel_version`: exactly one candidate, zero candidates, multiple candidates with an explicit list on stderr, directories without a `build/` subdir ignored; `KERNEL_VERSION` env path (valid, used to disambiguate, missing target dir, empty string falls back to auto-detect); structural checks that the function exists, the source-guard allows safe `source` from tests, and the old inline detection loop is gone from the main body.
+
+### Compatibility
+
+- **Backward compatible** with v5.14.x. Default behaviour is unchanged: `qrencode` still produces `.vpnuri.png`, and on CI hosts with exactly one installed kernel `_resolve_kernel_version` returns the same result as the previous loop.
+- The **workaround** previously required for long QRs (manually copying `.vpnuri` contents into the app) is no longer needed.
+
+### Upgrade
+
+From v5.14.1 to v5.14.2:
+
+```bash
+wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.2/install_amneziawg_en.sh
+sudo bash ./install_amneziawg_en.sh --force --yes
+```
+
+Step 5 of the installer pulls the latest `manage_amneziawg.sh` and `awg_common.sh` with SHA256 verification.
+
+[Full list of changes since v5.14.1](https://github.com/bivlked/amneziawg-installer/compare/v5.14.1...v5.14.2)
+
+---
+
 ## [5.14.1] - 2026-05-19
 
 **v5.14.1** - patch release: `manage regen` now picks up the MTU from the server `awg0.conf` when regenerating client configs and no longer hardcodes `1280` in the client file. No architectural changes; default behaviour (`MTU = 1280` on the server) is unchanged. Support matrix unchanged: Ubuntu 24.04 / 25.10 / 26.04, Debian 12 / 13, x86_64 + ARM (Raspberry Pi, Oracle Ampere, Hetzner CAX).
