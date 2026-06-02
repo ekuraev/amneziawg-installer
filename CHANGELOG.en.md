@@ -14,6 +14,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [5.15.1] - 2026-06-02
+
+**v5.15.1** - a maintenance release after a round of external code and documentation audits. No new features: it hardens the v5.15.0 dual-stack IPv6 work, tightens several management commands, and fixes a number of correctness and robustness issues. A default install is unchanged. Support matrix unchanged: Ubuntu 24.04 / 25.10 / 26.04, Debian 12 / 13, x86_64 + ARM.
+
+### Changed
+
+- **Split tunnel + IPv6 now mirrors the IPv4 intent (behavior change).** When a client uses a custom `ALLOWED_IPS` (split tunnel), the dual-stack config keeps that IPv4 split list and adds only the tunnel ULA for IPv6 - it no longer forces a full `::/0` IPv6 route. A full tunnel (`ALLOWED_IPS=0.0.0.0/0`) still gets `::/0` with native IPv6, or the tunnel ULA without it. This affects only clients created with both a split tunnel and `--allow-ipv6-tunnel`. If you relied on the old behavior of IPv6 going full-tunnel while IPv4 stayed split, recreate the client to pick up the new routing.
+
+### Fixed
+
+- **`vpn://` URI now carries the server's real MTU, keepalive, and DNS** instead of fixed values, so a config imported from the URI matches the `.conf` even after the server settings or a `manage modify` changed them.
+- **Stricter native-IPv6 detection.** The server is treated as natively IPv6-capable only when it has a global (non-ULA) IPv6 address and a default IPv6 route, so a client gets a full `::/0` route only when it will actually work.
+- **The IPv6 host stack is re-enabled before detection** when the tunnel needs it, so a server that had IPv6 disabled via sysctl still gets a working dual-stack tunnel.
+- **`install` fails fast if `apt update` errors out**, instead of continuing a multi-step install against a stale package cache.
+- **`manage modify` validates the Endpoint and AllowedIPs** it is given (host:port, CIDR list) before writing them.
+- **`manage add` is safe against name reuse:** it refuses a name that already exists and cleans up partial key or config artifacts if creation fails partway.
+- **`manage restore` prunes stale clients and keys** that are absent from the backup, so a restore yields exactly the backed-up state.
+- **`manage help` exits 0** for an explicit help request and 1 only for a real usage error.
+- **`manage --json` keeps stdout pure JSON** by routing info and debug logging to stderr.
+- **Log messages no longer double percent signs** ("95%" stays "95%").
+- **`manage restore` recreates the expiry directory** before restoring expiry timestamps.
+
+### Documentation
+
+- `--subnet` help states the `/24`-only requirement; `install --help` lists Ubuntu 26.04.
+- `manage --help` and the README document `list --json` (including the `client_ipv6` field).
+- Restored the changelog compare-links for 5.11.0-5.15.0, fixed several broken in-page anchors, refreshed `SECURITY.md` and `CONTRIBUTING.md`, and added `docs/RELEASE_PROCESS.md`.
+
+### Internal
+
+- Tagging a release now runs a full preflight gate (syntax, shellcheck, tests, punctuation, version and SHA-pin consistency, documentation checks) before the GitHub Release is published, plus a lightweight documentation-consistency workflow. The signing design doc was aligned with the asset-upload draft.
+
+---
+
 ## [5.15.0] - 2026-06-01
 
 **v5.15.0** - optional dual-stack IPv6 inside the tunnel. Requested by users in [#24](https://github.com/bivlked/amneziawg-installer/issues/24): the new `--allow-ipv6-tunnel` flag hands clients an IPv6 address from the private ULA subnet `fddd:2c4:2c4:2c4::/64` alongside the usual IPv4. Off by default - without the flag the install is identical to v5.14.x. Support matrix unchanged: Ubuntu 24.04 / 25.10 / 26.04, Debian 12 / 13, x86_64 + ARM.
@@ -238,7 +272,7 @@ sudo bash ./install_amneziawg_en.sh
 
 ### Upgrading an existing server
 
-Run the latest `install_amneziawg.sh` with `--force` (if AmneziaWG is already running) — Step 5 fetches the fresh `manage_amneziawg.sh` and `awg_common.sh` with SHA256 verification. Full commands — [ADVANCED.en.md → Updating the scripts](ADVANCED.en.md#-updating-scripts).
+Run the latest `install_amneziawg.sh` with `--force` (if AmneziaWG is already running) — Step 5 fetches the fresh `manage_amneziawg.sh` and `awg_common.sh` with SHA256 verification. Full commands — [ADVANCED.en.md → Updating the scripts](ADVANCED.en.md#update-scripts-adv).
 
 ### Tests
 
@@ -281,11 +315,11 @@ chmod +x install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh
 ```
 
-3 commands → ~20 minutes → a ready-to-use VPN server with traffic obfuscation. Details — [README → Install](README.en.md#install).
+3 commands → ~20 minutes → a ready-to-use VPN server with traffic obfuscation. Details — [README → Install](README.en.md#installation).
 
 ### Upgrading an existing server
 
-Run a fresh `install_amneziawg_en.sh` — at step 5, `manage_amneziawg.sh` and `awg_common.sh` are updated automatically (with SHA256 verification). Full commands — [ADVANCED.en.md → How to update the scripts](ADVANCED.en.md#-how-to-update-the-scripts).
+Run a fresh `install_amneziawg_en.sh` — at step 5, `manage_amneziawg.sh` and `awg_common.sh` are updated automatically (with SHA256 verification). Full commands — [ADVANCED.en.md → How to update the scripts](ADVANCED.en.md#update-scripts-adv).
 
 ### Tests
 
@@ -370,11 +404,11 @@ chmod +x install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh
 ```
 
-3 commands → ~20 minutes → a working VPN server with traffic obfuscation. Details — [README → Install](README.en.md#install).
+3 commands → ~20 minutes → a working VPN server with traffic obfuscation. Details — [README → Install](README.en.md#installation).
 
 ### Upgrading an existing server
 
-Run the fresh `install_amneziawg_en.sh` — at step 5 `manage_amneziawg.sh` and `awg_common.sh` are refreshed automatically (with SHA256 verification). Full commands — [ADVANCED.en.md → Updating the scripts](ADVANCED.en.md#-updating-the-scripts).
+Run the fresh `install_amneziawg_en.sh` — at step 5 `manage_amneziawg.sh` and `awg_common.sh` are refreshed automatically (with SHA256 verification). Full commands — [ADVANCED.en.md → Updating the scripts](ADVANCED.en.md#update-scripts-adv).
 
 ### Tests
 
@@ -406,11 +440,11 @@ chmod +x install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh
 ```
 
-3 commands → ~20 minutes → a working VPN server with traffic obfuscation. Details — [README → Install](README.en.md#install).
+3 commands → ~20 minutes → a working VPN server with traffic obfuscation. Details — [README → Install](README.en.md#installation).
 
 ### Upgrading an existing server
 
-Run the fresh `install_amneziawg_en.sh` — at step 5 `manage_amneziawg.sh` and `awg_common.sh` are refreshed automatically (with SHA256 verification). Full commands — [ADVANCED.en.md → Updating the scripts](ADVANCED.en.md#-updating-the-scripts).
+Run the fresh `install_amneziawg_en.sh` — at step 5 `manage_amneziawg.sh` and `awg_common.sh` are refreshed automatically (with SHA256 verification). Full commands — [ADVANCED.en.md → Updating the scripts](ADVANCED.en.md#update-scripts-adv).
 
 ### Tests
 
@@ -450,7 +484,7 @@ sudo bash ./install_amneziawg_en.sh
 
 ### Upgrading an existing server
 
-Re-run the latest `install_amneziawg_en.sh` — step 5 refreshes `manage_amneziawg.sh` and `awg_common.sh` automatically (with SHA256 verification). Full commands — [ADVANCED.en.md → How to Update Scripts](ADVANCED.en.md#-how-to-update-scripts).
+Re-run the latest `install_amneziawg_en.sh` — step 5 refreshes `manage_amneziawg.sh` and `awg_common.sh` automatically (with SHA256 verification). Full commands — [ADVANCED.en.md → How to Update Scripts](ADVANCED.en.md#update-scripts-adv).
 
 ### Tests
 
@@ -1194,7 +1228,24 @@ Major security and reliability update after several consecutive code audits. The
 - Diagnostic report (`--diagnostic`).
 - Full uninstall (`--uninstall`).
 
-[Unreleased]: https://github.com/bivlked/amneziawg-installer/compare/v5.10.2...HEAD
+[Unreleased]: https://github.com/bivlked/amneziawg-installer/compare/v5.15.1...HEAD
+[5.15.1]: https://github.com/bivlked/amneziawg-installer/compare/v5.15.0...v5.15.1
+[5.15.0]: https://github.com/bivlked/amneziawg-installer/compare/v5.14.5...v5.15.0
+[5.14.5]: https://github.com/bivlked/amneziawg-installer/compare/v5.14.4...v5.14.5
+[5.14.4]: https://github.com/bivlked/amneziawg-installer/compare/v5.14.3...v5.14.4
+[5.14.3]: https://github.com/bivlked/amneziawg-installer/compare/v5.14.2...v5.14.3
+[5.14.2]: https://github.com/bivlked/amneziawg-installer/compare/v5.14.1...v5.14.2
+[5.14.1]: https://github.com/bivlked/amneziawg-installer/compare/v5.14.0...v5.14.1
+[5.14.0]: https://github.com/bivlked/amneziawg-installer/compare/v5.13.0...v5.14.0
+[5.13.0]: https://github.com/bivlked/amneziawg-installer/compare/v5.12.1...v5.13.0
+[5.12.1]: https://github.com/bivlked/amneziawg-installer/compare/v5.12.0...v5.12.1
+[5.12.0]: https://github.com/bivlked/amneziawg-installer/compare/v5.11.5...v5.12.0
+[5.11.5]: https://github.com/bivlked/amneziawg-installer/compare/v5.11.4...v5.11.5
+[5.11.4]: https://github.com/bivlked/amneziawg-installer/compare/v5.11.3...v5.11.4
+[5.11.3]: https://github.com/bivlked/amneziawg-installer/compare/v5.11.2...v5.11.3
+[5.11.2]: https://github.com/bivlked/amneziawg-installer/compare/v5.11.1...v5.11.2
+[5.11.1]: https://github.com/bivlked/amneziawg-installer/compare/v5.11.0...v5.11.1
+[5.11.0]: https://github.com/bivlked/amneziawg-installer/compare/v5.10.2...v5.11.0
 [5.10.2]: https://github.com/bivlked/amneziawg-installer/compare/v5.10.1...v5.10.2
 [5.10.1]: https://github.com/bivlked/amneziawg-installer/compare/v5.10.0...v5.10.1
 [5.10.0]: https://github.com/bivlked/amneziawg-installer/compare/v5.9.0...v5.10.0

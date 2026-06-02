@@ -8,14 +8,14 @@ fi
 # ==============================================================================
 # AmneziaWG 2.0 installation and configuration script for Ubuntu/Debian servers
 # Author: @bivlked
-# Version: 5.15.0
-# Date: 2026-06-01
+# Version: 5.15.1
+# Date: 2026-06-02
 # Repository: https://github.com/bivlked/amneziawg-installer
 # ==============================================================================
 
 # --- Safe mode and Constants ---
 set -o pipefail
-SCRIPT_VERSION="5.15.0"
+SCRIPT_VERSION="5.15.1"
 
 AWG_DIR="/root/awg"
 CONFIG_FILE="$AWG_DIR/awgsetup_cfg.init"
@@ -33,8 +33,8 @@ MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 # Verified in step5_download_scripts() after curl.
 # Verification is skipped when AWG_BRANCH is overridden (test branch).
 # Format: sha256sum output (hex, 64 chars).
-COMMON_SCRIPT_SHA256="6e01a699f520a36b0cd65c2e0a1c357a92a06d14f68ffd35498551ae2f5e12f8"
-MANAGE_SCRIPT_SHA256="baa49a273539e9d9d8e342f9c2a914161fda96b58b4f016261744effa4b028b6"
+COMMON_SCRIPT_SHA256="25b741ee04b294963d082cd11afdef1fd14e18bff88a14376bef12cee13a226f"
+MANAGE_SCRIPT_SHA256="ce2d392c396d08915ea24eaa51663f12c3530dd9b044314feb3f585620a8a06b"
 
 # CLI flags
 UNINSTALL=0; HELP=0; DIAGNOSTIC=0; VERBOSE=0; NO_COLOR=0; AUTO_YES=0; NO_TWEAKS=0
@@ -92,9 +92,7 @@ log_msg() {
     local type="$1" msg="$2"
     local ts
     ts=$(date +'%F %T')
-    local safe_msg
-    safe_msg="${msg//%/%%}"
-    local entry="[$ts] $type: $safe_msg"
+    local entry="[$ts] $type: $msg"
     local color_start="" color_end=""
 
     if [[ "$NO_COLOR" -eq 0 ]]; then
@@ -252,7 +250,7 @@ apt_wait_for_ppa_package() {
 show_help() {
     cat << 'EOF'
 Usage: sudo bash install_amneziawg_en.sh [OPTIONS]
-Script for installation and configuration of AmneziaWG 2.0 on Ubuntu (24.04 / 25.10) and Debian (12 / 13).
+Script for installation and configuration of AmneziaWG 2.0 on Ubuntu (24.04 / 25.10 / 26.04) and Debian (12 / 13).
 
 Options:
   -h, --help            Show this help and exit
@@ -264,7 +262,7 @@ Options:
   --ssh-port=PORT       SSH port for the UFW rule (auto-detected by default;
                         comma-separated list). Use if SSH runs on a non-standard
                         port and auto-detection is unavailable
-  --subnet=SUBNET       Set tunnel subnet (x.x.x.x/yy) non-interactively
+  --subnet=SUBNET       Tunnel subnet, /24 only (e.g. 10.9.9.1/24) non-interactively
   --allow-ipv6          Keep IPv6 enabled non-interactively
   --disallow-ipv6       Force-disable IPv6 non-interactively
   --allow-ipv6-tunnel   Enable dual-stack IPv6 inside the tunnel (ULA, opt-in)
@@ -460,7 +458,12 @@ install_packages() {
     fi
     log "Installing: ${to_install[*]}..."
     if [[ "${_APT_UPDATED:-0}" -eq 0 ]]; then
-        apt_update_tolerant || log_warn "Failed to update apt."
+        # C4: a hard apt_update_tolerant failure (GPG / binary-repo network / OOM)
+        # is NOT source noise but a real error; continuing on a stale cache is not
+        # safe (contract line ~138, same as callers 1975/2108). die aborts the
+        # install, so _APT_UPDATED=1 is set only on success - otherwise a later
+        # install_packages call in this session would silently skip the update.
+        apt_update_tolerant || die "apt update error."
         _APT_UPDATED=1
     fi
     if ! DEBIAN_FRONTEND=noninteractive apt install -y "${to_install[@]}"; then
@@ -515,10 +518,23 @@ configure_ipv6() {
 }
 
 # Detect whether the VPS has native IPv6.
-# A global-scope IPv6 (not link-local fe80::) means egress to the IPv6 internet.
-# Echo 1 if a global IPv6 is found, otherwise 0.
+# Native IPv6 = a globally routable address (NOT ULA fc00::/7, NOT link-local
+# fe80::) AND a default IPv6 route. Either condition alone is insufficient:
+#   - a global address without a default route -> no IPv6 internet egress (a client
+#     with ::/0 would black-hole);
+#   - a ULA (fddd::/...) has global scope to `ip` but is not internet-routable.
+# Echo 1 only when both conditions hold, otherwise 0.
 detect_native_ipv6() {
-    if ip -6 addr show scope global 2>/dev/null | grep -q "inet6"; then
+    local have_addr=0 have_route=0
+    if ip -6 addr show scope global 2>/dev/null \
+        | grep -oP 'inet6\s+\K[0-9a-fA-F:]+' \
+        | grep -qviE '^(fc|fd)'; then
+        have_addr=1
+    fi
+    if ip -6 route show default 2>/dev/null | grep -q .; then
+        have_route=1
+    fi
+    if [[ "$have_addr" -eq 1 && "$have_route" -eq 1 ]]; then
         echo 1
     else
         echo 0
@@ -532,12 +548,23 @@ configure_ipv6_tunnel() {
         ALLOW_IPV6_TUNNEL=0
     fi
     : "${IPV6_SUBNET:=fddd:2c4:2c4:2c4::/64}"
-    # Detect native IPv6 on every run (cached in init for client render in Phase 4).
-    SERVER_HAS_NATIVE_IPV6=$(detect_native_ipv6)
-    if [[ "$ALLOW_IPV6_TUNNEL" -eq 1 && "$DISABLE_IPV6" -eq 1 ]]; then
-        log_warn "--allow-ipv6-tunnel requires host IPv6 forwarding; overriding --disallow-ipv6 (DISABLE_IPV6=0)"
-        DISABLE_IPV6=0
+    # The IPv6 tunnel requires host IPv6 enabled. Override --disallow-ipv6 AND
+    # actively re-enable IPv6 at runtime BEFORE detection/render: on an upgrade
+    # from a default past install (IPv6 was runtime-disabled), the kernel hides
+    # all IPv6 addresses, so detect_native_ipv6 would false-negative and a client
+    # would be rendered with an IPv6 Address while the kernel has IPv6 off
+    # (awg-quick restart can fail). weaq P1.
+    if [[ "$ALLOW_IPV6_TUNNEL" -eq 1 ]]; then
+        if [[ "$DISABLE_IPV6" -eq 1 ]]; then
+            log_warn "--allow-ipv6-tunnel requires host IPv6 forwarding; overriding --disallow-ipv6 (DISABLE_IPV6=0)"
+            DISABLE_IPV6=0
+        fi
+        sysctl -w net.ipv6.conf.all.disable_ipv6=0 >/dev/null 2>&1 || true
+        sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null 2>&1 || true
+        sysctl -w net.ipv6.conf.lo.disable_ipv6=0 >/dev/null 2>&1 || true
     fi
+    # Detect native IPv6 AFTER the runtime re-enable (cached in init for client render in Phase 4).
+    SERVER_HAS_NATIVE_IPV6=$(detect_native_ipv6)
     if [[ "$ALLOW_IPV6_TUNNEL" -eq 1 && "$SERVER_HAS_NATIVE_IPV6" -eq 0 ]]; then
         log_warn "Native IPv6 not detected on VPS - the IPv6 tunnel will work peer-to-peer only, without IPv6 internet egress."
     fi

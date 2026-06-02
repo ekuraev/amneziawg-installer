@@ -8,14 +8,14 @@ fi
 # ==============================================================================
 # Скрипт для управления пользователями (пирами) AmneziaWG 2.0
 # Автор: @bivlked
-# Версия: 5.15.0
-# Дата: 2026-06-01
+# Версия: 5.15.1
+# Дата: 2026-06-02
 # Репозиторий: https://github.com/bivlked/amneziawg-installer
 # ==============================================================================
 
 # --- Безопасный режим и Константы ---
 # shellcheck disable=SC2034
-SCRIPT_VERSION="5.15.0"
+SCRIPT_VERSION="5.15.1"
 set -o pipefail
 AWG_DIR="/root/awg"
 SERVER_CONF_FILE="/etc/amnezia/amneziawg/awg0.conf"
@@ -55,10 +55,11 @@ trap _manage_cleanup EXIT INT TERM
 
 # --- Обработка аргументов ---
 COMMAND=""
+HELP_EXIT_RC=0   # C1: 0 = явный help (exit 0); ставится в 1 для ошибок использования
 ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -h|--help)         COMMAND="help"; break ;;
+        -h|--help)         COMMAND="help"; HELP_EXIT_RC=0; break ;;
         -v|--verbose)      VERBOSE_LIST=1; shift ;;
         --no-color)        NO_COLOR=1; shift ;;
         --json)            JSON_OUTPUT=1; shift ;;
@@ -69,7 +70,7 @@ while [[ $# -gt 0 ]]; do
         --psk)             CLI_ADD_PSK=1; shift ;;
         --yes)             CLI_YES=1; shift ;;
         --carrier=*)       CLI_CARRIER="${1#*=}"; shift ;;
-        --*)               echo "Неизвестная опция: $1" >&2; COMMAND="help"; break ;;
+        --*)               echo "Неизвестная опция: $1" >&2; COMMAND="help"; HELP_EXIT_RC=1; break ;;
         *)
             if [[ -z "$COMMAND" ]]; then
                 COMMAND=$1
@@ -97,9 +98,7 @@ log_msg() {
     local type="$1" msg="$2"
     local ts
     ts=$(date +'%F %T')
-    local safe_msg
-    safe_msg="${msg//%/%%}"
-    local entry="[$ts] $type: $safe_msg"
+    local entry="[$ts] $type: $msg"
     local color_start="" color_end=""
 
     if [[ "$NO_COLOR" -eq 0 ]]; then
@@ -120,6 +119,11 @@ log_msg() {
     # WARN и ERROR в stderr (симметрия с install_amneziawg.sh:110+, важно
     # для CI/automation парсинга: stdout = «данные», stderr = «диагностика»).
     if [[ "$type" == "ERROR" || "$type" == "WARN" ]]; then
+        printf "${color_start}%s${color_end}\n" "$entry" >&2
+    elif [[ "${JSON_OUTPUT:-0}" -eq 1 ]]; then
+        # weaq P2: в режиме --json stdout обязан содержать ТОЛЬКО JSON (jq/automation).
+        # INFO/DEBUG уводим в stderr, иначе list/show/stats --json печатают INFO-строки
+        # перед JSON и ломают парсинг (подтверждено на biHetzner).
         printf "${color_start}%s${color_end}\n" "$entry" >&2
     else
         printf "${color_start}%s${color_end}\n" "$entry"
@@ -383,7 +387,7 @@ _restore_do_rollback() {
     [[ -d "$_rtd/keys" ]] && cp -a "$_rtd/keys/"* "$KEYS_DIR/" 2>/dev/null
     [[ -f "$_rtd/server_private.key" ]] && cp -a "$_rtd/server_private.key" "$AWG_DIR/" 2>/dev/null
     [[ -f "$_rtd/server_public.key" ]] && cp -a "$_rtd/server_public.key" "$AWG_DIR/" 2>/dev/null
-    [[ -d "$_rtd/expiry" ]] && cp -a "$_rtd/expiry"/* "${EXPIRY_DIR:-$AWG_DIR/expiry}/" 2>/dev/null
+    [[ -d "$_rtd/expiry" ]] && { mkdir -p "${EXPIRY_DIR:-$AWG_DIR/expiry}"; cp -a "$_rtd/expiry"/* "${EXPIRY_DIR:-$AWG_DIR/expiry}/" 2>/dev/null; }
     [[ -f "$_rtd/awg-expiry" ]] && cp -a "$_rtd/awg-expiry" /etc/cron.d/awg-expiry 2>/dev/null
     rm -rf "$_rtd"
 
@@ -582,6 +586,11 @@ restore_backup() {
 
     if [[ -d "$td/clients" ]]; then
         log "Восстановление файлов клиентов..."
+        # C11: чистая замена, не merge. Удаляю stale client-артефакты, которых
+        # нет в бэкапе (иначе клиент, удалённый после снятия бэкапа, остаётся
+        # orphan .conf/.png/.vpnuri). Scope строго managed client-globs - НЕ
+        # трогаю скрипты, server-ключи, backups/, логи, .lock, awgsetup_cfg.init.
+        rm -f "$AWG_DIR"/*.conf "$AWG_DIR"/*.png "$AWG_DIR"/*.vpnuri 2>/dev/null || true
         if ! cp -a "$td/clients/"* "$AWG_DIR/"; then
             log_error "Ошибка копирования clients — восстановление прервано (запуск отката)."
             return 1
@@ -596,6 +605,9 @@ restore_backup() {
     if [[ -d "$td/keys" ]]; then
         log "Восстановление ключей..."
         mkdir -p "$KEYS_DIR"
+        # C11: удаляю stale client-ключи, которых нет в бэкапе (server-ключи
+        # лежат в AWG_DIR, не в KEYS_DIR, поэтому не затрагиваются).
+        rm -f "$KEYS_DIR"/* 2>/dev/null || true
         if ! cp -a "$td/keys/"* "$KEYS_DIR/"; then
             log_error "Ошибка копирования keys — восстановление прервано (запуск отката)."
             return 1
@@ -624,6 +636,10 @@ restore_backup() {
     if [[ -d "$td/expiry" ]]; then
         log "Восстановление данных expiry..."
         mkdir -p "${EXPIRY_DIR:-$AWG_DIR/expiry}"
+        # C11: expiry НЕ пруним намеренно. Orphan-метки для несуществующих клиентов
+        # безвредны (cron-чистка их игнорирует), а prune здесь был бы небезопасен:
+        # и rm, и последующий cp - best-effort (|| true), так что сбой copy после
+        # prune молча оставил бы expiry пустым. Сами client-артефакты пруним выше.
         cp -a "$td/expiry/"* "${EXPIRY_DIR:-$AWG_DIR/expiry}/" 2>/dev/null || true
         chmod 600 "${EXPIRY_DIR:-$AWG_DIR/expiry}"/* 2>/dev/null
     fi
@@ -687,17 +703,43 @@ modify_client() {
                 return 1
             fi ;;
         Endpoint)
+            # C5: помимо отсечения опасных символов - позитивная проверка host:port.
             case "$value" in
-                *$'\n'*|*$'\r'*|*\\*|*\"*|*\'*|"")
+                *$'\n'*|*$'\r'*|*\\*|*\"*|*\'*|*' '*|*$'\t'*|"")
                     log_error "Невалидный Endpoint: '$value'"
                     return 1 ;;
-            esac ;;
+            esac
+            local _eh _ept
+            if [[ "$value" == \[*\]:* ]]; then
+                _eh="${value%]:*}"; _eh="${_eh#\[}"   # IPv6 без скобок
+                _ept="${value##*]:}"
+                [[ "$_eh" =~ ^[0-9A-Fa-f:]+$ ]] || { log_error "Невалидный Endpoint '$value': некорректный IPv6-хост"; return 1; }
+            else
+                _eh="${value%:*}"; _ept="${value##*:}"
+                [[ "$_eh" =~ ^([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*|[0-9]{1,3}(\.[0-9]{1,3}){3})$ ]] || { log_error "Невалидный Endpoint '$value': ожидается host:port (FQDN / IPv4 / [IPv6])"; return 1; }
+            fi
+            { [[ "$_ept" =~ ^[0-9]+$ ]] && [[ "$_ept" -ge 1 && "$_ept" -le 65535 ]]; } || { log_error "Невалидный Endpoint '$value': порт должен быть 1-65535"; return 1; }
+            ;;
         AllowedIPs)
+            # C5: помимо отсечения опасных символов - позитивная проверка CIDR-списка.
             case "$value" in
                 *$'\n'*|*$'\r'*|*\\*|*\"*|*\'*|"")
                     log_error "Невалидный AllowedIPs: '$value'"
                     return 1 ;;
-            esac ;;
+            esac
+            local _aip_tok _aip_ifs="$IFS"
+            IFS=','
+            for _aip_tok in $value; do
+                _aip_tok="${_aip_tok//[[:space:]]/}"
+                [[ -z "$_aip_tok" ]] && continue
+                if ! [[ "$_aip_tok" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$ || "$_aip_tok" =~ ^[0-9A-Fa-f:]+(/[0-9]{1,3})?$ ]]; then
+                    IFS="$_aip_ifs"
+                    log_error "Невалидный AllowedIPs '$value': '$_aip_tok' не похож на CIDR (a.b.c.d/n или IPv6/n)"
+                    return 1
+                fi
+            done
+            IFS="$_aip_ifs"
+            ;;
     esac
 
     # Блокировка перед state-проверками (защита от TOCTOU с concurrent remove)
@@ -1358,7 +1400,11 @@ stats_clients() {
 # ==============================================================================
 
 usage() {
-    exec >&2
+    # C1: явный help (rc=0) -> stdout + exit 0; ошибка использования (rc!=0,
+    # дефолт) -> stderr + exit 1. Явные help-вызовы передают 0, error-вызовы
+    # опускают аргумент (получают 1).
+    local _rc="${1:-1}"
+    [[ "$_rc" -ne 0 ]] && exec >&2
     echo ""
     echo "Скрипт управления AmneziaWG 2.0 (v${SCRIPT_VERSION})"
     echo "=============================================="
@@ -1368,7 +1414,7 @@ usage() {
     echo "  -h, --help            Показать эту справку"
     echo "  -v, --verbose         Расширенный вывод (для команды list)"
     echo "  --no-color            Отключить цветной вывод"
-    echo "  --json                JSON-вывод (для команды stats)"
+    echo "  --json                Машиночитаемый JSON-вывод (для команд list / show / stats)"
     echo "  --expires=ВРЕМЯ       Срок действия при add (1h, 12h, 1d, 7d, 30d, 4w)"
     echo "  --conf-dir=ПУТЬ       Указать директорию AWG (умолч: $AWG_DIR)"
     echo "  --server-conf=ПУТЬ    Указать файл конфига сервера"
@@ -1383,7 +1429,7 @@ usage() {
     echo "Команды:"
     echo "  add <имя> [имя2 ...]        Добавить клиента(ов). --expires применяется ко всем"
     echo "  remove <имя> [имя2 ...]     Удалить клиента(ов)"
-    echo "  list [-v]             Показать список клиентов"
+    echo "  list [-v] [--json]    Показать список клиентов (--json: машиночитаемый, с client_ipv6)"
     echo "  stats [--json]        Статистика трафика по клиентам"
     echo "  regen [имя]           Перегенерировать файлы клиента(ов)"
     echo "  modify <имя> <пар> <зн> Изменить параметр клиента"
@@ -1397,15 +1443,18 @@ usage() {
     echo "                        (dkms autoinstall + modprobe + запуск awg-quick)"
     echo "  help                  Показать эту справку"
     echo ""
-    exit 1
+    exit "$_rc"
 }
 
 # ==============================================================================
 # Основная логика
 # ==============================================================================
 
-if [[ "$COMMAND" == "help" || -z "$COMMAND" ]]; then
-    usage
+if [[ -z "$COMMAND" ]]; then
+    usage 1
+fi
+if [[ "$COMMAND" == "help" ]]; then
+    usage "$HELP_EXIT_RC"
 fi
 
 check_dependencies || exit 1

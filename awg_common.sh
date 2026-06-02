@@ -3,8 +3,8 @@
 # ==============================================================================
 # Общая библиотека функций для AmneziaWG 2.0
 # Автор: @bivlked
-# Версия: 5.15.0
-# Дата: 2026-06-01
+# Версия: 5.15.1
+# Дата: 2026-06-02
 # Репозиторий: https://github.com/bivlked/amneziawg-installer
 # ==============================================================================
 #
@@ -924,8 +924,10 @@ _extract_mtu_from_server_conf() {
 # client_ipv6 (необязательный, 7-й аргумент): IPv6-адрес клиента без префикса
 # длины (например fddd:2c4:2c4:2c4::5). Если непустой и ALLOW_IPV6_TUNNEL=1:
 #   - Address = <ipv4>/32, <ipv6>/128
-#   - AllowedIPs: SERVER_HAS_NATIVE_IPV6=1 -> 0.0.0.0/0, ::/0
-#                 SERVER_HAS_NATIVE_IPV6=0 -> 0.0.0.0/0, <IPV6_SUBNET>
+#   - AllowedIPs (зеркалю IPv4 routing mode в IPv6, intent-mirroring):
+#       full tunnel (ALLOWED_IPS=0.0.0.0/0): + ::/0 (native) или + <IPV6_SUBNET> (no-native)
+#       split tunnel (кастомный ALLOWED_IPS): IPv4-список БЕЗ изменений + ТОЛЬКО <IPV6_SUBNET>,
+#         НИКОГДА ::/0 - нет IPv6 split-list, нельзя угонять весь IPv6 (ломает split-tunnel).
 # Если пустой (legacy-клиент): Address = <ipv4>/32, AllowedIPs без изменений.
 render_client_config() {
     local name="$1"
@@ -941,11 +943,23 @@ render_client_config() {
     local conf_file="$AWG_DIR/${name}.conf"
     local allowed_ips
     if [[ -n "$client_ipv6" ]]; then
-        if [[ "${SERVER_HAS_NATIVE_IPV6:-0}" == "1" ]]; then
-            allowed_ips="0.0.0.0/0, ::/0"
+        # Dual-stack: зеркалю IPv4 routing intent в IPv6.
+        # full tunnel (IPv4=0.0.0.0/0) -> ::/0 (native) или tunnel-ULA (no-native).
+        # split tunnel (кастомный ALLOWED_IPS) -> IPv4-split AS-IS + ТОЛЬКО tunnel-ULA,
+        # никогда ::/0 (нет IPv6 split-list, нельзя угонять весь IPv6).
+        local ipv4_part ipv6_part
+        ipv4_part="${ALLOWED_IPS:-0.0.0.0/0}"
+        if [[ "$ipv4_part" == "0.0.0.0/0" && "${SERVER_HAS_NATIVE_IPV6:-0}" == "1" ]]; then
+            ipv6_part="::/0"
         else
-            allowed_ips="0.0.0.0/0, ${IPV6_SUBNET:-fddd:2c4:2c4:2c4::/64}"
+            ipv6_part="${IPV6_SUBNET:-fddd:2c4:2c4:2c4::/64}"
         fi
+        # Защитный de-dup: ALLOWED_IPS по конструкции IPv4-only, но не дублирую
+        # ipv6_part если он уже присутствует токеном в списке.
+        case ",${ipv4_part// /}," in
+            *",${ipv6_part},"*) allowed_ips="$ipv4_part" ;;
+            *)                  allowed_ips="${ipv4_part}, ${ipv6_part}" ;;
+        esac
     else
         allowed_ips="${ALLOWED_IPS:-0.0.0.0/0}"
     fi
@@ -1391,12 +1405,25 @@ generate_vpn_uri() {
     # затягивает \r в значение, что ломает JSON.allowed_ips).
     allowed_ips=$(grep -oP 'AllowedIPs\s*=\s*\K.+' "$conf_file" | tr -d ' \r') || allowed_ips="0.0.0.0/0"
 
+    # MTU/PersistentKeepalive/DNS из .conf - могли быть изменены через manage modify.
+    # Клиент Amnezia при импорте vpn:// использует структурные поля inner JSON
+    # (awgConfigurator берёт mtu именно из структурного поля, не из embedded config),
+    # поэтому хардкод рассинхронизировал бы их с .conf - тот же класс, что issue #67
+    # (structured-поле psk_key было авторитетным).
+    local mtu keepalive dns_line dns1 dns2
+    mtu=$(grep -oP '^MTU\s*=\s*\K[0-9]+' "$conf_file" | head -n1); mtu="${mtu:-1280}"
+    keepalive=$(grep -oP '^PersistentKeepalive\s*=\s*\K[0-9]+' "$conf_file" | head -n1); keepalive="${keepalive:-33}"
+    dns_line=$(grep -oP '^DNS\s*=\s*\K.+' "$conf_file" | head -n1 | tr -d ' \r')
+    dns1="${dns_line%%,*}"; dns1="${dns1:-1.1.1.1}"
+    if [[ "$dns_line" == *,* ]]; then dns2="${dns_line#*,}"; dns2="${dns2%%,*}"; else dns2="$dns1"; fi
+
     local vpn_uri perl_err
     perl_err=$(awg_mktemp) || perl_err="/tmp/awg_perl_err.$$"
     # shellcheck disable=SC2016
     vpn_uri=$(perl -MCompress::Zlib -MMIME::Base64 -e '
         my ($conf_path, $h1,$h2,$h3,$h4, $jc,$jmin,$jmax,
-            $s1,$s2,$s3,$s4, $i1, $port, $ep, $cip, $cipv6, $cpk, $spk, $aips, $psk) = @ARGV;
+            $s1,$s2,$s3,$s4, $i1, $port, $ep, $cip, $cipv6, $cpk, $spk, $aips, $psk,
+            $mtu, $keepalive, $dns1, $dns2) = @ARGV;
 
         open my $fh, "<", $conf_path or die;
         local $/; my $raw = <$fh>; close $fh;
@@ -1430,8 +1457,8 @@ generate_vpn_uri() {
             $inner .= qq("psk_key":"$epsk",);
         }
         $inner .= qq("config":"$eraw",);
-        $inner .= qq("hostName":"$ep","mtu":"1280",);
-        $inner .= qq("persistent_keep_alive":"33","port":$port,);
+        $inner .= qq("hostName":"$ep","mtu":"$mtu",);
+        $inner .= qq("persistent_keep_alive":"$keepalive","port":$port,);
         $inner .= qq("server_pub_key":"$spk"});
 
         my $einner = je($inner);
@@ -1442,7 +1469,8 @@ generate_vpn_uri() {
         $outer .= qq("transport_proto":"udp"\},"container":"amnezia-awg"\}],);
         $outer .= qq("defaultContainer":"amnezia-awg",);
         $outer .= qq("description":"AWG Server",);
-        $outer .= qq("dns1":"1.1.1.1","dns2":"1.0.0.1",);
+        my $ed1 = je($dns1); my $ed2 = je($dns2);
+        $outer .= qq("dns1":"$ed1","dns2":"$ed2",);
         $outer .= qq("hostName":"$ep"});
 
         my $compressed = compress($outer);
@@ -1456,7 +1484,8 @@ generate_vpn_uri() {
         "$AWG_Jc" "$AWG_Jmin" "$AWG_Jmax" \
         "$AWG_S1" "$AWG_S2" "$AWG_S3" "$AWG_S4" \
         "$AWG_I1" "$AWG_PORT" "$endpoint" \
-        "$client_ip" "$client_ipv6" "$client_privkey" "$server_pubkey" "$allowed_ips" "$client_psk" 2>"$perl_err"
+        "$client_ip" "$client_ipv6" "$client_privkey" "$server_pubkey" "$allowed_ips" "$client_psk" \
+        "$mtu" "$keepalive" "$dns1" "$dns2" 2>"$perl_err"
     )
 
     if [[ -z "$vpn_uri" ]]; then
@@ -1520,6 +1549,13 @@ generate_qr_vpnuri() {
     return 0
 }
 
+# Удаляет частично созданные артефакты клиента (ключи + .conf). Используется
+# в early-error путях generate_client - C10: не оставлять orphan-ключи при сбое
+# до коммита пира в серверный конфиг.
+_rollback_client_artifacts() {
+    rm -f "$KEYS_DIR/$1.private" "$KEYS_DIR/$1.public" "$AWG_DIR/$1.conf"
+}
+
 # Полный цикл создания клиента:
 # keypair → next IP → client config → add peer → QR
 # generate_client <name> [endpoint]
@@ -1561,29 +1597,40 @@ generate_client() {
         return 1
     fi
 
-    # Генерация ключей
-    generate_keypair "$name" || { exec {lock_fd}>&-; return 1; }
+    # C6: клиент не должен уже существовать. Проверяю ПОД локом, ДО генерации
+    # ключей - иначе `add <существующее_имя>` молча перезатёр бы ключи живого
+    # клиента (generate_keypair перезаписывает безусловно), а параллельный add
+    # того же имени гонялся бы за перезапись.
+    if [[ -e "$KEYS_DIR/${name}.private" || -e "$KEYS_DIR/${name}.public" || -e "$AWG_DIR/${name}.conf" ]]; then
+        log_error "Клиент '$name' уже существует. Используйте 'remove' или другое имя."
+        exec {lock_fd}>&-
+        return 1
+    fi
+
+    # Генерация ключей. С этого момента любой ранний сбой обязан удалить уже
+    # созданные ключи/conf (C10) через _rollback_client_artifacts.
+    generate_keypair "$name" || { _rollback_client_artifacts "$name"; exec {lock_fd}>&-; return 1; }
 
     # Следующий свободный IP
     local client_ip
-    client_ip=$(get_next_client_ip) || { exec {lock_fd}>&-; return 1; }
+    client_ip=$(get_next_client_ip) || { _rollback_client_artifacts "$name"; exec {lock_fd}>&-; return 1; }
 
     # IPv6-адрес клиента (при ALLOW_IPV6_TUNNEL=1)
     local client_ipv6=""
     if [[ "${ALLOW_IPV6_TUNNEL:-0}" == "1" ]]; then
-        client_ipv6=$(get_next_client_ipv6 "$client_ip") || { exec {lock_fd}>&-; return 1; }
+        client_ipv6=$(get_next_client_ipv6 "$client_ip") || { _rollback_client_artifacts "$name"; exec {lock_fd}>&-; return 1; }
         log_debug "Выделен IPv6-адрес ${client_ipv6} для клиента ${name}"
     fi
 
     # Читаем ключи
     local client_privkey client_pubkey server_pubkey
-    client_privkey=$(cat "$KEYS_DIR/${name}.private") || { exec {lock_fd}>&-; return 1; }
-    client_pubkey=$(cat "$KEYS_DIR/${name}.public") || { exec {lock_fd}>&-; return 1; }
+    client_privkey=$(cat "$KEYS_DIR/${name}.private") || { _rollback_client_artifacts "$name"; exec {lock_fd}>&-; return 1; }
+    client_pubkey=$(cat "$KEYS_DIR/${name}.public") || { _rollback_client_artifacts "$name"; exec {lock_fd}>&-; return 1; }
 
     # Пытаемся восстановить server_public.key из awg0.conf если кеша нет
     # (поддержка ручных установок без installer-шага 6).
-    _ensure_server_public_key || { exec {lock_fd}>&-; return 1; }
-    server_pubkey=$(cat "$AWG_DIR/server_public.key") || { exec {lock_fd}>&-; return 1; }
+    _ensure_server_public_key || { _rollback_client_artifacts "$name"; exec {lock_fd}>&-; return 1; }
+    server_pubkey=$(cat "$AWG_DIR/server_public.key") || { _rollback_client_artifacts "$name"; exec {lock_fd}>&-; return 1; }
 
     # Endpoint: из аргумента → AWG_ENDPOINT (awgsetup_cfg.init) → curl до
     # внешних сервисов → локальный IP с сетевого интерфейса.
@@ -1600,22 +1647,23 @@ generate_client() {
     fi
     if [[ -z "$endpoint" ]]; then
         log_error "Не удалось определить внешний IP сервера. Используйте --endpoint=IP"
+        _rollback_client_artifacts "$name"
         exec {lock_fd}>&-
         return 1
     fi
 
     # Конфиг клиента
     render_client_config "$name" "$client_ip" "$client_privkey" "$server_pubkey" "$endpoint" "${AWG_PORT}" "$client_ipv6" || {
-        log_error "Откат: удаление ключей '$name'"
-        rm -f "$KEYS_DIR/${name}.private" "$KEYS_DIR/${name}.public"
+        log_error "Откат: удаление артефактов '$name'"
+        _rollback_client_artifacts "$name"
         exec {lock_fd}>&-
         return 1
     }
 
     # Добавляем пир в серверный конфиг
     if ! add_peer_to_server "$name" "$client_pubkey" "$client_ip" "$client_ipv6"; then
-        log_error "Откат: удаление файлов '$name'"
-        rm -f "$AWG_DIR/${name}.conf" "$KEYS_DIR/${name}.private" "$KEYS_DIR/${name}.public"
+        log_error "Откат: удаление артефактов '$name'"
+        _rollback_client_artifacts "$name"
         exec {lock_fd}>&-
         return 1
     fi
