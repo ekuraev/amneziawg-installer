@@ -3,33 +3,57 @@
   <b>RU</b> <a href="README.md">Русский</a> | <b>EN</b> English
 </p>
 
-<p align="center"><em>One-command VPN that works where WireGuard gets blocked — self-hosted on any $3 VPS</em></p>
-
 <p align="center">
-  <img src="logo.jpg" alt="AmneziaWG 2.0 VPN Installer — Ubuntu, Debian, Raspberry Pi, ARM64, mobile carrier optimization" width="600">
+  <img src="logo.jpg" alt="AmneziaWG 2.0 VPN installer for Ubuntu, Debian, Raspberry Pi and ARM64 VPS" width="600">
 </p>
 
-<p align="center">
-  <strong>A set of Bash scripts for one-command installation, secure hardening,<br>
-  and easy management of an AmneziaWG 2.0 VPN server on Ubuntu (24.04 LTS / 25.10 / 26.04) and Debian (12 / 13)</strong>
-</p>
+<h1 align="center">Install AmneziaWG 2.0 VPN on Ubuntu and Debian VPS</h1>
+
+<p align="center"><em>One-command, self-hosted AmneziaWG 2.0 VPN for Ubuntu 24.04 / 25.10 and Debian 12 / 13. Kernel-native DKMS, no Docker, no web panel, runs on any cheap VPS.</em></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Ubuntu-24.04_|_25.10_|_26.04-orange" alt="Ubuntu 24.04 | 25.10 | 26.04">
   <img src="https://img.shields.io/badge/Debian-12_|_13-A81D33" alt="Debian 12 | 13">
   <img src="https://img.shields.io/badge/Architecture-x86__64_|_ARM64_|_ARMv7-green" alt="x86_64 | ARM64 | ARMv7">
-  <a href="https://github.com/bivlked/amneziawg-installer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/bivlked/amneziawg-installer" alt="License"></a>
-  <img src="https://img.shields.io/badge/Status-Stable-success" alt="Status">
-  <a href="https://github.com/bivlked/amneziawg-installer/releases"><img src="https://img.shields.io/badge/Installer_Version-5.15.6-blue" alt="Version"></a>
   <img src="https://img.shields.io/badge/AmneziaWG-2.0-blueviolet" alt="AWG 2.0">
-  <a href="https://github.com/bivlked/amneziawg-installer/actions/workflows/shellcheck.yml"><img src="https://github.com/bivlked/amneziawg-installer/actions/workflows/shellcheck.yml/badge.svg" alt="ShellCheck"></a>
+  <a href="https://github.com/bivlked/amneziawg-installer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/bivlked/amneziawg-installer" alt="License"></a>
+  <a href="https://github.com/bivlked/amneziawg-installer/releases"><img src="https://img.shields.io/badge/Installer_Version-5.15.6-blue" alt="Version"></a>
   <a href="https://github.com/bivlked/amneziawg-installer/actions/workflows/test.yml"><img src="https://github.com/bivlked/amneziawg-installer/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
-  <a href="https://github.com/bivlked/amneziawg-installer/actions/workflows/docs-check.yml"><img src="https://github.com/bivlked/amneziawg-installer/actions/workflows/docs-check.yml/badge.svg" alt="Docs Check"></a>
-  <a href="https://github.com/bivlked/amneziawg-installer/actions/workflows/arm-build.yml"><img src="https://github.com/bivlked/amneziawg-installer/actions/workflows/arm-build.yml/badge.svg" alt="ARM Build"></a>
   <a href="https://github.com/bivlked/amneziawg-installer/stargazers"><img src="https://img.shields.io/github/stars/bivlked/amneziawg-installer?style=flat" alt="Stars"></a>
-  <a href="https://github.com/bivlked/amneziawg-installer/network/members"><img src="https://img.shields.io/github/forks/bivlked/amneziawg-installer?style=flat" alt="Forks"></a>
   <img src="https://img.shields.io/github/last-commit/bivlked/amneziawg-installer" alt="Last commit">
 </p>
+
+<p align="center">
+  <b>In-kernel, no Docker or panels - zero overhead</b> &nbsp;|&nbsp; <b>VPN-only server, hardened by default</b> &nbsp;|&nbsp; <b>set it and forget it</b> &nbsp;|&nbsp; <b>QR or one-tap vpn:// import</b>
+</p>
+
+<a id="quickstart"></a>
+## 🚀 Quick Start
+
+```bash
+wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.15.6/install_amneziawg_en.sh
+chmod +x install_amneziawg_en.sh
+sudo bash ./install_amneziawg_en.sh
+```
+
+> What it does: installs AmneziaWG 2.0 (kernel module via DKMS), configures the firewall and forwarding, creates the first client, and prints a QR code plus a `vpn://` link for one-tap import into the Amnezia client. Adding a friend or a device later is a single `add` command.
+> 3 commands. 2 reboots along the way. About 20 minutes to a working VPN. For a clean Ubuntu/Debian VPS, not a home router or shared hosting. [Details →](#installation)
+
+> 📘 Full deployment guide: [Install AmneziaWG VPN server on Ubuntu/Debian VPS](INSTALL_VPS.md) - covers VPS choice, ARM, troubleshooting, and uninstall.
+
+> 🔐 Integrity: the script is fetched over HTTPS from `raw.githubusercontent.com` (pinned tag). Detached release signatures are not active yet (planned) - status and threat model in [SECURITY.md](SECURITY.md).
+
+<details>
+<summary><strong>Non-interactive installation (for automation)</strong></summary>
+
+```bash
+sudo bash ./install_amneziawg_en.sh --yes --route-all
+```
+
+All parameters are accepted automatically. Details: [ADVANCED.en.md#cli-params-adv](ADVANCED.en.md#cli-params-adv)
+</details>
+
+---
 
 <p align="center">
   <a href="#why">Why this project</a> •
@@ -54,9 +78,11 @@
 <a id="why"></a>
 ## 💡 Why this project
 
-[AmneziaWG](https://github.com/amnezia-vpn) is a fork of WireGuard with traffic obfuscation. DPI systems cannot distinguish it from random noise, so the connection is not blocked.
+[AmneziaWG](https://github.com/amnezia-vpn) is a fork of WireGuard with traffic obfuscation. The obfuscation makes the traffic hard for DPI systems to tell apart from random noise, so where plain WireGuard gets detected and blocked, AmneziaWG usually keeps working.
 
-This set of scripts turns a clean VPS into a ready-to-use VPN server. No Linux knowledge required — the script configures the firewall, optimizes the system, and generates client configs and QR codes automatically.
+This set of scripts turns a clean VPS into a ready-to-use VPN server. No Linux knowledge required - the script configures the firewall, optimizes the system, and generates client configs and QR codes automatically.
+
+The server is tuned for a single job - VPN: extra packages are removed, the kernel, network stack and swap are tuned to the hardware, and the firewall and baseline hardening are enabled. AmneziaWG runs in the kernel, so overhead is minimal - fast and lean. Set it up once for your home or family and forget it: adding a friend or a new device a month later takes a minute, with the config and QR generated by a single command.
 
 Works on Ubuntu 24.04/25.10/26.04 and Debian 12/13. Any cheap VPS with 1 GB RAM is enough.
 
@@ -67,35 +93,35 @@ Works on Ubuntu 24.04/25.10/26.04 and Debian 12/13. Any cheap VPS with 1 GB RAM 
 
 | | WireGuard | AmneziaWG 2.0 |
 |---|---|---|
-| **DPI detection** | Fingerprinted by fixed packet sizes and magic bytes | Undetectable — randomized headers, padding, protocol mimicry |
+| **DPI detection** | Fingerprinted by fixed packet sizes and magic bytes | Hard to fingerprint - randomized headers, padding, protocol mimicry |
 | **Blocked in** | China, Russia, Iran, UAE, Turkmenistan | No known blocks (as of April 2026) |
 | **Server setup** | Manual: keys, iptables, sysctl, systemd | One command, 20 min, fully automatic |
 | **Hardening** | DIY: UFW, Fail2Ban, sysctl | Automatic: firewall + brute-force protection + kernel tuning |
 | **Client management** | Edit configs by hand, restart | `add`/`remove`/`list`/`stats` with hot-reload |
 | **Temporary access** | Not built-in | `--expires=7d` with auto-cleanup |
-| **Server requirements** | — | Same — any $3-5/mo VPS, 1 GB RAM |
-| **Speed overhead** | Baseline | Negligible (<2%) |
+| **Server requirements** | - | Same - any $3-5/mo VPS, 1 GB RAM |
+| **Speed overhead** | Baseline | Negligible (<2% in typical tests) |
 
-> If WireGuard works for you and isn't blocked — keep using it. If it's blocked or throttled — AmneziaWG 2.0 is the drop-in replacement.
+> If WireGuard works for you and isn't blocked - keep using it. If it's blocked or throttled - AmneziaWG 2.0 is the drop-in replacement.
 
 ---
 
 <a id="cli-vs-panel"></a>
 ## ⚙️ CLI Installer vs Web Panels
 
-> **The goal: set up a VPN on a cheap VPS in 20 minutes.** The script doesn't pull in Docker, a web server, or a database. After installation only AWG and the firewall are running — minimal footprint, maximum resources for VPN.
+> **The goal: set up a VPN on a cheap VPS in 20 minutes.** The script doesn't pull in Docker, a web server, or a database. After installation only AWG and the firewall are running - minimal footprint, maximum resources for VPN.
 
 | | This project (CLI) | Docker-based web panels |
 |---|---|---|
-| **AWG module** | Kernel module — runs at kernel level | Userspace inside a container |
+| **AWG module** | Kernel module - runs at kernel level | Userspace inside a container |
 | **Server requirements** | Any VPS with 512 MB RAM | Needs PHP/Python, database, web server, Docker |
 | **Attack surface** | SSH + UDP VPN port | + HTTP panel, database, Docker |
 | **Installation** | Single command on the server, 20 minutes | docker-compose + giving SSH access to the panel |
 | **After reboot** | Resumes installation from the same step | Depends on container and database state |
-| **Web interface** | ❌ None — SSH only | ✅ GUI, browser-based management |
+| **Web interface** | ❌ None, SSH only (managed via the `manage` script) | ✅ GUI, browser-based management |
 | **Multiple protocols** | AmneziaWG only | WireGuard, OpenVPN, VLESS and others |
 
-> Need a VPN without GUI on a dedicated server — this project. Need a web panel with multiple protocols — look for Docker-based solutions.
+> Need a VPN without GUI on a dedicated server - this project. Need a web panel with multiple protocols - look for Docker-based solutions.
 
 ---
 
@@ -115,57 +141,30 @@ This installer is the headless SSH path: minimum footprint, no web panel, kernel
 
 ---
 
-<a id="quickstart"></a>
-## 🚀 Quick Start
-
-> 📘 **Full deployment guide:** [Install AmneziaWG VPN server on Ubuntu/Debian VPS](INSTALL_VPS.md) - covers VPS choice, ARM, troubleshooting, and uninstall.
-
-```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.15.6/install_amneziawg_en.sh
-chmod +x install_amneziawg_en.sh
-sudo bash ./install_amneziawg_en.sh
-```
-
-> 3 commands to start. 2 reboots along the way. About 20 minutes to a working VPN. [Learn more →](#installation)
-
-> 🔐 **Integrity:** the script is fetched over HTTPS from `raw.githubusercontent.com` (pinned tag). Detached release signatures are not active yet (planned) - status and threat model in [SECURITY.md](SECURITY.md).
-
-<details>
-<summary><strong>Non-interactive installation (for automation)</strong></summary>
-
-```bash
-sudo bash ./install_amneziawg_en.sh --yes --route-all
-```
-
-All parameters are accepted automatically. Details: [ADVANCED.en.md#cli-params-adv](ADVANCED.en.md#cli-params-adv)
-</details>
-
----
-
 <a id="features"></a>
 ## ✨ Features
 
-* **DPI bypass** — AmneziaWG 2.0 with traffic obfuscation. DPI cannot detect the connection
-* **One command — working VPN** — from a clean VPS to a running server with client configs and QR codes
-* **Secure by default** — UFW, Fail2Ban, sysctl hardening, strict file permissions (600/700)
-* **Easy management** — add/remove clients, temporary clients with auto-removal, traffic stats, backups
+* **DPI bypass** - AmneziaWG 2.0 with traffic obfuscation. DPI cannot detect the connection
+* **One command - working VPN** - from a clean VPS to a running server with client configs and QR codes
+* **Secure by default** - UFW, Fail2Ban, sysctl hardening, strict file permissions (600/700)
+* **Easy management** - add/remove clients, temporary clients with auto-removal, traffic stats, backups
 * **Broad OS support** - Ubuntu 24.04/25.10/26.04 and Debian 12/13
-* **x86_64 and ARM** — cloud VPS, Raspberry Pi 3/4/5, ARM64 servers (AWS Graviton, Oracle Ampere, Hetzner)
-* **Mobile network optimization** — `--preset=mobile` for Tele2, Yota, Megafon and other carriers with DPI blocking. Fine-tune with `--jc`, `--jmin`, `--jmax` ([details](ADVANCED.en.md#presets-adv))
+* **x86_64 and ARM** - cloud VPS, Raspberry Pi 3/4/5, ARM64 servers (AWS Graviton, Oracle Ampere, Hetzner)
+* **Mobile network optimization** - `--preset=mobile` for Tele2, Yota, Megafon and other carriers with DPI blocking. Fine-tune with `--jc`, `--jmin`, `--jmax` ([details](ADVANCED.en.md#presets-adv))
 * **Optional dual-stack IPv6** - the `--allow-ipv6-tunnel` flag adds IPv6 inside the tunnel next to IPv4 (off by default, [details](ADVANCED.en.md#ipv6-tunnel-adv))
 
 <details>
 <summary><strong>All features</strong></summary>
 
-* Native key and config generation via `awg` — no Python or external dependencies
+* Native key and config generation via `awg` - no Python or external dependencies
 * Hardware-aware optimization: swap, NIC offloads, network buffers tuned to server specs
-* DKMS — automatic kernel module rebuild on updates
+* DKMS - automatic kernel module rebuild on updates
 * `vpn://` URI for one-tap import into Amnezia Client (`.vpnuri` files)
 * Per-client traffic statistics (`stats`, `stats --json`)
 * Temporary clients with auto-removal (`--expires=1h`, `7d`, `4w`, etc.)
 * Diagnostic report (`--diagnostic`) and full uninstall (`--uninstall`)
 * All actions logged to `/root/awg/`
-* Resume after reboot — the script picks up from where it left off
+* Resume after reboot - the script picks up from where it left off
 * Choice of port, subnet, IPv6 mode, and routing mode. `--endpoint` flag for servers behind NAT
 </details>
 
@@ -174,18 +173,18 @@ All parameters are accepted automatically. Details: [ADVANCED.en.md#cli-params-a
 <a id="carriers"></a>
 ## 📡 Tested mobile carriers (Russia)
 
-If your VPN is unstable on mobile data, run the installer with `--preset=mobile`. Below — working configurations reported in issues and discussions:
+If your VPN is unstable on mobile data, run the installer with `--preset=mobile`. Below - configurations reported by users in issues and discussions (not a guarantee: blocking and carrier parameters change over time):
 
-- **Yota** — Moscow, `--preset=mobile`
-- **Tele2** — Moscow (`--preset=mobile`); Krasnoyarsk (`--preset=mobile`; the May 2026 wave needed `I1=<r 48>`)
-- **Tattelecom / Letai** — Tatarstan, `--preset=mobile`
-- **Megafon** — regional networks, `--preset=mobile` + remove the `I1` parameter
-- **Beeline** — default preset, no flags needed
-- **Home / wired ISPs** — default preset usually works out of the box
+- **Yota** - Moscow, `--preset=mobile`
+- **Tele2** - Moscow (`--preset=mobile`); Krasnoyarsk (`--preset=mobile`; the May 2026 wave needed `I1=<r 48>`)
+- **Tattelecom / Letai** - Tatarstan, `--preset=mobile`
+- **Megafon** - regional networks, `--preset=mobile` + remove the `I1` parameter
+- **Beeline** - default preset, no flags needed
+- **Home / wired ISPs** - default preset usually works out of the box
 
-Your carrier is not on the list? Try `--preset=mobile`. If that doesn't work — open a thread in [Discussions](https://github.com/bivlked/amneziawg-installer/discussions) or [Issues](https://github.com/bivlked/amneziawg-installer/issues) and I'll add the entry.
+Your carrier is not on the list? Try `--preset=mobile`. If that doesn't work - open a thread in [Discussions](https://github.com/bivlked/amneziawg-installer/discussions) or [Issues](https://github.com/bivlked/amneziawg-installer/issues) and I'll add the entry.
 
-> Full operator parameter table (Jc, Jmin, Jmax, I1) — in [ADVANCED.en.md → FAQ "connects over cellular only on the third attempt"](ADVANCED.en.md#faq-advanced-adv). Per-flag overrides via `--jc`/`--jmin`/`--jmax` — in [ADVANCED.en.md → Presets](ADVANCED.en.md#presets-adv).
+> Full operator parameter table (Jc, Jmin, Jmax, I1) - in [ADVANCED.en.md → FAQ "connects over cellular only on the third attempt"](ADVANCED.en.md#faq-advanced-adv). Per-flag overrides via `--jc`/`--jmin`/`--jmax` - in [ADVANCED.en.md → Presets](ADVANCED.en.md#presets-adv).
 
 ---
 
@@ -195,7 +194,7 @@ Your carrier is not on the list? Try `--preset=mobile`. If that doesn't work —
 * **OS:** A **clean** installation of **Ubuntu Server 24.04 LTS** / **Ubuntu 25.10** / **Ubuntu 26.04** / **Debian 12** / **Debian 13** Minimal
 * **Access:** `root` privileges (via `sudo`)
 * **Internet:** Stable connection
-* **Resources:** ~1 GB RAM (2+ GB recommended), minimum ~2 GB disk (3+ GB recommended)
+* **Resources:** 512 MB RAM minimum, 1 GB recommended (2+ GB comfortable); minimum ~2 GB disk (3+ GB recommended)
 * **SSH:** SSH access to the server
 
 **OS Compatibility:**
@@ -221,8 +220,8 @@ Your carrier is not on the list? Try `--preset=mobile`. If that doesn't work —
 > ⚠️ **Non-standard SSH port:** The installer usually detects the SSH port automatically. If SSH runs on a non-standard port or autodetection is unavailable, run with `--ssh-port=YOUR_PORT` (comma-separated for several ports). As an extra conservative safeguard you can run `sudo ufw allow YOUR_PORT/tcp` **before** starting the installer.
 
 **Clients:**
-* **All platforms:** [Amnezia VPN](https://github.com/amnezia-vpn/amnezia-client/releases) **>= 4.8.12.7** — full-featured VPN client with AWG 2.0. Import via `vpn://` URI
-* **Windows:** [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-windows-client/releases) **>= 2.0.0** — lightweight tunnel manager with AWG 2.0. Import via `.conf` files
+* **All platforms:** [Amnezia VPN](https://github.com/amnezia-vpn/amnezia-client/releases) **>= 4.8.12.7** - full-featured VPN client with AWG 2.0. Import via `vpn://` URI
+* **Windows:** [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-windows-client/releases) **>= 2.0.0** - lightweight tunnel manager with AWG 2.0. Import via `.conf` files
 
 > [Full client compatibility table →](ADVANCED.en.md#client-compat-adv)
 
@@ -233,14 +232,19 @@ Your carrier is not on the list? Try `--preset=mobile`. If that doesn't work —
 
 For a stable, high-throughput VPN server, you need reliable hosting with a good network.
 
+**What to look for in a VPS for VPN:**
+- IPs not flagged as datacenter ranges - lower risk of range-based blocks.
+- Generous or unlimited traffic and a 1 Gbps+ port.
+- Your target OS (Ubuntu 24.04+ / Debian 12+) and root access.
+
 I've tested and recommend [**FreakHosting**](https://freakhosting.com/clientarea/aff.php?aff=392). Their **BUDGET VPS** lineup offers excellent value for money.
 
-Their IPs are not flagged as datacenter — they are not blocked by services that restrict hosting/datacenter IP ranges (unlike Azure and some major clouds).
+Their IPs are not flagged as datacenter - they are not blocked by services that restrict hosting/datacenter IP ranges (unlike Azure and some major clouds).
 
 * **Recommended plan:** **BVPS-2**
 * **Specs:** 2 vCPU, 2 GB RAM, 40 GB NVMe SSD.
 * **Key advantage:** **10 Gbps** port with **unlimited traffic**. Perfect for VPN!
-* **Price:** Just **€25 per year**.
+* **Price:** Just **€25 per year** (at time of writing; may change).
 
 This configuration is more than enough for comfortable AmneziaWG operation with many connections and heavy traffic.
 
@@ -282,9 +286,9 @@ This installation method handles interactive prompts and colored output correctl
     * **UDP port:** Port for client connections (1024-65535). Default: `39743`.
     * **Tunnel subnet:** Internal VPN network. Default: `10.9.9.1/24`.
     * **Disable IPv6:** Recommended (`Y`) to prevent traffic leaks.
-    * **Routing mode:** Determines which traffic goes through the VPN. Default `2` (Amnezia List + DNS) — recommended for best compatibility and bypassing restrictions.
+    * **Routing mode:** Determines which traffic goes through the VPN. Default `2` (Amnezia List + DNS) - recommended for best compatibility and bypassing restrictions.
 
-    AWG 2.0 parameters (Jc, S1-S4, H1-H4, I1) are generated **automatically** — no action required.
+    AWG 2.0 parameters (Jc, S1-S4, H1-H4, I1) are generated **automatically** - no action required.
 
 6.  **Reboots:** **TWO** reboots are required. The script will ask for confirmation `[y/N]`. Type `y` and press Enter.
 
@@ -361,25 +365,32 @@ The `manage_amneziawg.sh` script is downloaded automatically during installation
 sudo bash /root/awg/manage_amneziawg.sh <command> [arguments]
 ```
 
-**Main commands:** (Full list: `... help` or [ADVANCED.en.md#manage-commands-adv](ADVANCED.en.md#manage-commands-adv))
+Full list: `... help` or [ADVANCED.en.md#manage-commands-adv](ADVANCED.en.md#manage-commands-adv).
+
+**Everyday commands:**
 
 | Command   | Arguments              | Description                    | Restart? |
 | :-------- | :--------------------- | :----------------------------- | :------: |
 | `add`     | `<name> [name2 ...] [--expires=DUR]`  | Add client(s) (opt. with expiry) | No (auto) |
 | `remove`  | `<name> [name2 ...]`   | Remove client(s)               | No (auto) |
 | `list`    | `[-v] [--json]`        | List clients (`-v` for details, `--json` machine-readable with `client_ipv6`)|    No     |
+| `show`    |                        | Run `awg show`                 |    No     |
+| `stats`   | `[--json]`             | Per-client traffic statistics  |    No     |
+
+**Maintenance and recovery:**
+
+| Command   | Arguments              | Description                    | Restart? |
+| :-------- | :--------------------- | :----------------------------- | :------: |
 | `regen`   | `[client_name]`        | Regenerate files (all/one)     |    No     |
 | `modify`  | `<name> <param> <val>` | Modify a client parameter      |    No     |
 | `backup`  |                        | Create a backup                |    No     |
 | `restore` | `[file]`               | Restore from backup            |    No     |
-| `stats`   | `[--json]`                | Per-client traffic statistics    |    No     |
-| `show`    |                        | Run `awg show`                 |    No     |
 | `check`   |                        | Check server status            |    No     |
 | `diagnose`| `[--carrier=NAME]`     | Diagnostics (opt. per carrier) |    No     |
 | `repair-module` |                  | Rebuild kernel module (DKMS)   |    Yes    |
 | `restart` |                        | Restart AmneziaWG service      |    -      |
 
-> **💡 Note:** `add` and `remove` commands auto-apply changes via `awg syncconf` — no service restart needed.
+> **💡 Note:** `add` and `remove` commands auto-apply changes via `awg syncconf` - no service restart needed.
 
 ### 📌 Quick Reference
 
@@ -429,6 +440,8 @@ For the roadmap and priorities, see **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 <a id="faq"></a>
 ## ❓ FAQ
 
+> **In this section:** install and updates, connecting clients, mobile networks, choosing a host and migrating, security and parameters. Expand the relevant question below.
+
 <details>
   <summary><strong>Q: Will it survive a kernel update?</strong></summary>
   <b>A:</b> Yes, DKMS should automatically rebuild the module. Verify with <code>dkms status</code>.
@@ -440,7 +453,7 @@ For the roadmap and priorities, see **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 </details>
 
 <details>
-  <summary><strong>Q: Clients can't connect — what should I do?</strong></summary>
+  <summary><strong>Q: Clients can't connect - what should I do?</strong></summary>
   <b>A:</b> 1. Check status: <code>sudo bash /root/awg/manage_amneziawg.sh check</code>. 2. Check firewall: <code>sudo ufw status verbose</code>. 3. Verify client config. 4. Check logs: <code>sudo journalctl -u awg-quick@awg0 -n 50</code>. 5. Make sure the client supports AWG 2.0: Amnezia VPN <b>>= 4.8.12.7</b> or AmneziaWG <b>>= 2.0.0</b>.
 </details>
 
@@ -455,7 +468,7 @@ For the roadmap and priorities, see **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 </details>
 
 <details>
-  <summary><strong>Q: Config import error "Invalid key: s3" — what's wrong?</strong></summary>
+  <summary><strong>Q: Config import error "Invalid key: s3" - what's wrong?</strong></summary>
   <b>A:</b> You're using an outdated version of <code>amneziawg-windows-client</code> (< 2.0.0). Update to <a href="https://github.com/amnezia-vpn/amneziawg-windows-client/releases"><b>version 2.0.0+</b></a> which supports AWG 2.0. Alternatively, use <a href="https://github.com/amnezia-vpn/amnezia-client/releases"><b>Amnezia VPN</b></a> >= 4.8.12.7.
 </details>
 
@@ -478,12 +491,12 @@ For the roadmap and priorities, see **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 <details>
   <summary><strong>Q: What is the maximum number of clients?</strong></summary>
-  <b>A:</b> A <code>/24</code> subnet supports up to 253 clients (.2 — .254), which is sufficient for most use cases.
+  <b>A:</b> A <code>/24</code> subnet supports up to 253 clients (.2 - .254), which is sufficient for most use cases.
 </details>
 
 <details>
   <summary><strong>Q: Which hosting providers work well?</strong></summary>
-  <b>A:</b> Any VPS with Ubuntu 24.04 LTS / Ubuntu 25.10 / Ubuntu 26.04 / Debian 12 / Debian 13, root access, and at least 1 GB RAM. Pick providers with clean (non-blacklisted) IPs and unlimited traffic. See the <a href="#hosting-recommendation">recommendation</a> below.
+  <b>A:</b> Any VPS with Ubuntu 24.04 LTS / Ubuntu 25.10 / Ubuntu 26.04 / Debian 12 / Debian 13, root access, and at least 512 MB RAM (1 GB recommended). Pick providers with clean (non-blacklisted) IPs and unlimited traffic. See the <a href="#hosting-recommendation">recommendation</a> below.
 </details>
 
 <details>
@@ -502,8 +515,8 @@ For the roadmap and priorities, see **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 </details>
 
 <details>
-  <summary><strong>Q: Shadowrocket on iOS/macOS does not connect — needs PresharedKey</strong></summary>
-  <b>A:</b> Since v5.11.1 the <code>add</code> command supports a <code>--psk</code> flag: <code>sudo bash /root/awg/manage_amneziawg.sh add my_iphone --psk</code>. The client config will include a <code>PresharedKey = ...</code> line matching the server <code>[Peer]</code>. For existing clients: recreate with the flag (<code>remove</code> + <code>add --psk</code>) or manually — generate the key <em>once</em> (<code>PSK=$(awg genpsk)</code>) and paste the <em>same value</em> into both sides (the server <code>[Peer]</code> for that client and the client's <code>[Peer]</code> for the server); the handshake fails if the values differ. <code>regen</code> preserves an existing PSK across rotation. Details — in <a href="ADVANCED.en.md#manage-cli-adv">ADVANCED.en.md</a>.
+  <summary><strong>Q: Shadowrocket on iOS/macOS does not connect - needs PresharedKey</strong></summary>
+  <b>A:</b> Since v5.11.1 the <code>add</code> command supports a <code>--psk</code> flag: <code>sudo bash /root/awg/manage_amneziawg.sh add my_iphone --psk</code>. The client config will include a <code>PresharedKey = ...</code> line matching the server <code>[Peer]</code>. For existing clients: recreate with the flag (<code>remove</code> + <code>add --psk</code>) or manually - generate the key <em>once</em> (<code>PSK=$(awg genpsk)</code>) and paste the <em>same value</em> into both sides (the server <code>[Peer]</code> for that client and the client's <code>[Peer]</code> for the server); the handshake fails if the values differ. <code>regen</code> preserves an existing PSK across rotation. Details - in <a href="ADVANCED.en.md#manage-cli-adv">ADVANCED.en.md</a>.
 </details>
 
 <details>
@@ -513,7 +526,7 @@ For the roadmap and priorities, see **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 <details>
   <summary><strong>Q: Is Perl required on the server?</strong></summary>
-  <b>A:</b> Perl is used optionally for generating <code>vpn://</code> URIs (<code>.vpnuri</code> files). If Perl is absent, <code>.conf</code> files are still created normally — you can use them via file import or QR code. Perl is installed by default on Ubuntu and Debian.
+  <b>A:</b> Perl is used optionally for generating <code>vpn://</code> URIs (<code>.vpnuri</code> files). If Perl is absent, <code>.conf</code> files are still created normally - you can use them via file import or QR code. Perl is installed by default on Ubuntu and Debian.
 </details>
 
 <details>
@@ -542,7 +555,7 @@ For the roadmap and priorities, see **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 ### Clients
 
-> **Which client should I use?** Install [**Amnezia VPN**](https://github.com/amnezia-vpn/amnezia-client/releases) (>= 4.8.12.7) — works on all platforms, supports `vpn://` URI import.
+> **Which client should I use?** Install [**Amnezia VPN**](https://github.com/amnezia-vpn/amnezia-client/releases) (>= 4.8.12.7) - works on all platforms, supports `vpn://` URI import.
 > For a lightweight connection (`.conf` import only), use **AmneziaWG** for your platform.
 
 | Client | Platform | AWG 2.0 | Type | Notes |
@@ -560,7 +573,7 @@ For the roadmap and priorities, see **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 | Project | Description |
 |---------|-------------|
-| [Junker](https://spatiumstas.github.io/junker/) | AmneziaWG signature generator by @spatiumstas — for manual setup without an installer |
+| [Junker](https://spatiumstas.github.io/junker/) | AmneziaWG signature generator by @spatiumstas - for manual setup without an installer |
 | [AmneziaWG-Architect](https://vadim-khristenko.github.io/AmneziaWG-Architect/) | CPS/mimicry generator UI for AWG 2.0 by @Vadim-Khristenko ([GitHub](https://github.com/Vadim-Khristenko/AmneziaWG-Architect)) |
 
 ### Router Firmware
@@ -576,21 +589,21 @@ For the roadmap and priorities, see **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 **📖 Tutorials & Guides**
 - [Hetzner Community - Making a website accessible from restricted regions](https://community.hetzner.com/tutorials/making-website-accessible-from-restricted-regions) (cross-link in Resources)
-- [Debian Forums — HowTo: Install AmneziaWG 2.0 on Debian 12/13](https://forums.debian.net/viewtopic.php?t=166105)
+- [Debian Forums - HowTo: Install AmneziaWG 2.0 on Debian 12/13](https://forums.debian.net/viewtopic.php?t=166105)
 - [LowEndTalk - [Tutorial] One-command AmneziaWG VPN server install on Ubuntu / Debian / ARM](https://lowendtalk.com/discussion/217191)
 
 **📰 Articles & Reviews**
-- [XDA Developers — "I found a self-hosted VPN that works where WireGuard gets blocked"](https://www.xda-developers.com/self-hosted-vpn-works-where-wireguard-gets-blocked/)
-- [Pinggy — Top 5 Best Self-Hosted VPNs in 2026](https://pinggy.io/blog/top_5_best_self_hosted_vpns/)
-- [gHacks Tech News — AmneziaWG 2.0](https://www.ghacks.net/2026/03/25/amnezia-releases-amneziawg-2-0-to-bypass-advanced-internet-censorship-systems/)
+- [XDA Developers - "I found a self-hosted VPN that works where WireGuard gets blocked"](https://www.xda-developers.com/self-hosted-vpn-works-where-wireguard-gets-blocked/)
+- [Pinggy - Top 5 Best Self-Hosted VPNs in 2026](https://pinggy.io/blog/top_5_best_self_hosted_vpns/)
+- [gHacks Tech News - AmneziaWG 2.0](https://www.ghacks.net/2026/03/25/amnezia-releases-amneziawg-2-0-to-bypass-advanced-internet-censorship-systems/)
 
 **📋 Listings & Directories**
-- [VPN Status (RU) — AmneziaWG services and server-side options catalog](https://vpnstatus.site/protocols/amneziawg)
+- [VPN Status (RU) - AmneziaWG services and server-side options catalog](https://vpnstatus.site/protocols/amneziawg)
 - [AlternativeTo - amneziawg-installer (42 alternatives)](https://alternativeto.net/software/amneziawg-installer/about/)
 - [LibHunt - #1 in Shell VPN category](https://www.libhunt.com/r/amneziawg-installer)
 
 **💬 Forums & Communities**
-- [Qubes OS Forum — AmneziaWG for censored regions](https://forum.qubes-os.org/t/installation-of-amnezia-vpn-and-amnezia-wg-effective-tools-against-internet-blocks-via-dpi-for-china-russia-belarus-turkmenistan-iran-vpn-with-vless-xray-reality-best-obfuscation-for-wireguard-easy-self-hosted-vpn-bypass/39005)
+- [Qubes OS Forum - AmneziaWG for censored regions](https://forum.qubes-os.org/t/installation-of-amnezia-vpn-and-amnezia-wg-effective-tools-against-internet-blocks-via-dpi-for-china-russia-belarus-turkmenistan-iran-vpn-with-vless-xray-reality-best-obfuscation-for-wireguard-easy-self-hosted-vpn-bypass/39005)
 - [Lemmy.world /c/selfhosted - amneziawg-installer announce (143 upvotes / 39 comments)](https://lemmy.world/post/45242153)
 
 </details>
@@ -601,7 +614,7 @@ For the roadmap and priorities, see **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 ## 📝 License & Author
 
 * **Author:** @bivlked - [GitHub](https://github.com/bivlked)
-* **License:** MIT — free and open-source (see `LICENSE`)
+* **License:** MIT - free and open-source (see `LICENSE`)
 
 ---
 
