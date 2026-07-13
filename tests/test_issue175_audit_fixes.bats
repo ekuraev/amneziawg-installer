@@ -180,3 +180,34 @@ _run_ensure_module() {
         [[ "$block" == *'continue'* ]]
     done
 }
+
+# ---------------------------------------------------------------------------
+# Fix 5: NO_CPS in the awg_common safe_load_config whitelist
+# ---------------------------------------------------------------------------
+
+@test "issue #175/5 functional: RU/EN awg_common safe_load_config exports NO_CPS" {
+    for f in awg_common.sh awg_common_en.sh; do
+        run bash -c '
+            log() { :; }; log_warn() { :; }; log_error() { :; }; log_debug() { :; }
+            AWG_DIR=$(mktemp -d); export AWG_DIR
+            source "'"$BATS_TEST_DIRNAME"'/../'"$f"'"
+            cfg=$(mktemp)
+            printf "export NO_CPS=1\nexport NO_TWEAKS=0\n" > "$cfg"
+            unset NO_CPS
+            safe_load_config "$cfg"
+            rc_val="${NO_CPS:-UNSET}"
+            rm -rf "$cfg" "$AWG_DIR"
+            echo "NO_CPS=$rc_val"
+        '
+        [ "$status" -eq 0 ]
+        [[ "$output" == *'NO_CPS=1'* ]]
+    done
+}
+
+@test "issue #175/5: whitelists in installer and awg_common agree on NO_CPS" {
+    for f in awg_common.sh awg_common_en.sh install_amneziawg.sh install_amneziawg_en.sh; do
+        run grep -c 'NO_TWEAKS|NO_CPS|' "$BATS_TEST_DIRNAME/../$f"
+        [ "$status" -eq 0 ]
+        [ "$output" -ge 1 ]
+    done
+}
