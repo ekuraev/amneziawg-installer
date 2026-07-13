@@ -33,8 +33,8 @@ MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 # Verified in step5_download_scripts() after curl.
 # Verification is skipped when AWG_BRANCH is overridden (test branch).
 # Format: sha256sum output (hex, 64 chars).
-COMMON_SCRIPT_SHA256="e36e877cb894dc2e7a9c4221e3322efc6d90e70394357d46529aae8861bc1f58"
-MANAGE_SCRIPT_SHA256="7c08500a7837b1bc8245519f22dc9f571aafcd3ee8f3425dcdac4ce312c6a321"
+COMMON_SCRIPT_SHA256="a06599b917cf979e524f704bc87272860fb0c9544e3dec8a95a6459f55b85d17"
+MANAGE_SCRIPT_SHA256="aff32c77b566d942c188e050d2ce8edf2487d9a21a7ac0f81d18895525419a3c"
 
 # CLI flags
 UNINSTALL=0; HELP=0; HELP_EXIT_RC=0; DIAGNOSTIC=0; VERBOSE=0; NO_COLOR=0; AUTO_YES=0; NO_TWEAKS=0; NO_CPS=0
@@ -2018,6 +2018,12 @@ initialize_setup() {
     if [[ "$CLI_DISABLE_IPV6" != "default" ]]; then DISABLE_IPV6=$CLI_DISABLE_IPV6; fi
     if [[ "$CLI_ROUTING_MODE" != "default" ]]; then
         ALLOWED_IPS_MODE=$CLI_ROUTING_MODE
+        # An explicit CLI mode overrides the list too: previously --route-all/
+        # --route-amnezia on reinstall changed only the mode while ALLOWED_IPS
+        # kept the old value from awgsetup_cfg.init - the flag silently had no
+        # effect (Issue #170). An empty list forces configure_routing_mode to
+        # recompute it for the new mode.
+        ALLOWED_IPS=""
         if [[ "$CLI_ROUTING_MODE" -eq 3 ]]; then ALLOWED_IPS=$CLI_CUSTOM_ROUTES; fi
     fi
     if [[ -n "$CLI_ENDPOINT" ]]; then
@@ -2195,6 +2201,14 @@ EOF
     log "Subnet: ${AWG_TUNNEL_SUBNET}"
     log "IPv6 disable: $DISABLE_IPV6"
     log "AllowedIPs mode: $ALLOWED_IPS_MODE"
+    # Changing the routing mode is a client-config operation: new clients get
+    # the new list, but for existing ones regen deliberately preserves
+    # AllowedIPs (per-client modify customizations). Hint the explicit way to
+    # apply the new mode to everyone (Issue #170).
+    if [[ "$config_exists" -eq 1 && "$CLI_ROUTING_MODE" != "default" ]]; then
+        log_warn "Routing mode changed. Existing client configs keep their old AllowedIPs."
+        log_warn "Apply the new mode to all clients: sudo bash $MANAGE_SCRIPT_PATH regen --reset-routes"
+    fi
 
     # Loading state
     if [[ -f "$STATE_FILE" ]]; then
