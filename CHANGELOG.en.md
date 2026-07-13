@@ -12,6 +12,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Resuming an interrupted install (a stale `setup_state=7/99` after a step 7 failure) with configuration CLI flags (`--port`, `--subnet`, `--route-*`, `--endpoint`, `--ssh-port`, obfuscation flags) no longer skips steps 4-6: previously the new values were written to `awgsetup_cfg.init` while `awg0.conf`, client configs and UFW rules silently kept the old ones. The installer now rolls the state back to step 4 and regenerates the firewall and configs (#175)
+- Reinstalling with a new `--port` deletes the old port's UFW rule: previously the old UDP port stayed open forever — the only `ufw delete` lives in uninstall and reads the already rewritten config, so even `--uninstall` never removed it. SSH limit rules are deliberately left alone (auto-removal on a misdetected port would cut off server access) (#175)
+- `manage repair-module` no longer reports "service is active" with exit 0 while the service is down: `ensure_amneziawg_kernel_module full` now returns a distinct code 2 for "module OK but awg-quick@awg0 did not start", and repair-module turns it into an explicit error with diagnostics hints. `add`/`remove` keep their previous behavior (warning + config written; apply_config reports the apply failure itself) (#175)
+- `manage add` exits non-zero when a requested client already exists (no-op): parity with `remove`/`regen`, automation can distinguish "created" from "nothing was done" (#175)
+- The `NO_CPS` key was added to the `safe_load_config` whitelist in `awg_common.sh` — aligned with the installer's copy of the function (#175)
+
 ## [5.19.1] - 2026-07-13
 
 **v5.19.1** - changing the routing mode after install works again (contributed by @ekuraev), an early check for a too-old kernel, and subnet-guard hardening.
