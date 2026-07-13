@@ -1654,7 +1654,11 @@ case $COMMAND in
             validate_client_name "$_cname" || { _cmd_rc=1; continue; }
 
             if grep -qxF "#_Name = ${_cname}" "$SERVER_CONF_FILE"; then
+                # _cmd_rc=1 - паритет с remove ("Нет клиентов для удаления") и
+                # regen ("не найден, пропуск"): no-op по этому имени должен быть
+                # различим по exit-коду для автоматизации (Issue #175).
                 log_warn "Клиент '$_cname' уже существует, пропуск."
+                _cmd_rc=1
                 continue
             fi
 

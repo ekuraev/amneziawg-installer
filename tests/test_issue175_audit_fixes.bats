@@ -166,3 +166,17 @@ _run_ensure_module() {
         [ "$(grep -c '"$_mod_rc" -eq 2' "$BATS_TEST_DIRNAME/../$f")" -eq 2 ]
     done
 }
+
+# ---------------------------------------------------------------------------
+# Fix 4: add sets _cmd_rc=1 when a requested client already exists
+# ---------------------------------------------------------------------------
+
+@test "issue #175/4: RU/EN add duplicate-skip branch flags failure via _cmd_rc" {
+    for f in manage_amneziawg.sh manage_amneziawg_en.sh; do
+        # The 'already exists' skip must set _cmd_rc=1 before continue,
+        # matching remove/regen exit-code semantics for no-op names.
+        block=$(grep -A6 'grep -qxF "#_Name = ${_cname}" "$SERVER_CONF_FILE"; then' "$BATS_TEST_DIRNAME/../$f" | head -8)
+        [[ "$block" == *'_cmd_rc=1'* ]]
+        [[ "$block" == *'continue'* ]]
+    done
+}

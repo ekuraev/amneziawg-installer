@@ -1662,7 +1662,11 @@ case $COMMAND in
             validate_client_name "$_cname" || { _cmd_rc=1; continue; }
 
             if grep -qxF "#_Name = ${_cname}" "$SERVER_CONF_FILE"; then
+                # _cmd_rc=1 - parity with remove ("No clients to remove") and
+                # regen ("not found, skipping"): a no-op for this name must be
+                # distinguishable via the exit code for automation (Issue #175).
                 log_warn "Client '$_cname' already exists, skipping."
+                _cmd_rc=1
                 continue
             fi
 
