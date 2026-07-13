@@ -595,6 +595,11 @@ _ensure_awg_quick_running() {
 #   0 — module loaded successfully (and in "full" mode awg-quick is active).
 #   1 — final modprobe failed, or invalid mode argument
 #       (with a 4-step manual recovery printed to the log).
+#   2 — "full" mode only: the module is fine but awg-quick@awg0 did not
+#       start (a service problem: broken config, busy port, etc.).
+#       Previously this was swallowed into log_warn + return 0 and
+#       repair-module claimed "service is active" while it was down
+#       (Issue #175).
 ensure_amneziawg_kernel_module() {
     local mode="${1:-full}"
     case "$mode" in
@@ -610,8 +615,10 @@ ensure_amneziawg_kernel_module() {
     # Fast-path: module already loaded.
     if lsmod 2>/dev/null | awk '{print $1}' | grep -qx 'amneziawg'; then
         if [[ "$mode" == "full" ]]; then
-            _ensure_awg_quick_running awg0 || \
+            _ensure_awg_quick_running awg0 || {
                 log_warn "Module is active but awg-quick@awg0 did not start (module OK, this is a service issue)."
+                return 2
+            }
         fi
         return 0
     fi
@@ -622,8 +629,10 @@ ensure_amneziawg_kernel_module() {
            lsmod 2>/dev/null | awk '{print $1}' | grep -qx 'amneziawg'; then
             log "amneziawg module found on disk and loaded successfully."
             if [[ "$mode" == "full" ]]; then
-                _ensure_awg_quick_running awg0 || \
+                _ensure_awg_quick_running awg0 || {
                     log_warn "Module loaded but awg-quick@awg0 did not start (module OK, this is a service issue)."
+                    return 2
+                }
             fi
             return 0
         fi
@@ -691,8 +700,10 @@ ensure_amneziawg_kernel_module() {
 
     log "amneziawg module loaded successfully for kernel ${kernel_ver}."
     if [[ "$mode" == "full" ]]; then
-        _ensure_awg_quick_running awg0 || \
+        _ensure_awg_quick_running awg0 || {
             log_warn "Module loaded but awg-quick@awg0 did not start (module OK, this is a service issue)."
+            return 2
+        }
     fi
     return 0
 }

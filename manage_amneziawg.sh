@@ -1621,8 +1621,14 @@ case $COMMAND in
         # AWG_SKIP_APPLY=1 (offline/batch edit без apply): пропускаем проверку модуля —
         # apply_config сам сделает no-op, и команда должна работать на dev-машине.
         if [[ "${AWG_SKIP_APPLY:-0}" != "1" ]]; then
-            ensure_amneziawg_kernel_module \
-                || die "Модуль ядра amneziawg недоступен. Запустите 'manage repair-module' и повторите."
+            # rc=2 (модуль OK, сервис не поднялся) не блокирует add: конфиг
+            # записывается, а apply_config сам явно сообщит о неприменении.
+            ensure_amneziawg_kernel_module; _mod_rc=$?
+            if [[ "$_mod_rc" -eq 1 ]]; then
+                die "Модуль ядра amneziawg недоступен. Запустите 'manage repair-module' и повторите."
+            elif [[ "$_mod_rc" -eq 2 ]]; then
+                log_warn "Сервис awg-quick@awg0 не активен - конфиг будет записан, но применение может не сработать."
+            fi
         fi
 
         # --psk: включить опциональный PresharedKey для каждого нового клиента.
@@ -1734,8 +1740,14 @@ case $COMMAND in
             # AWG_SKIP_APPLY=1 (offline/batch edit без apply): пропускаем проверку модуля —
             # apply_config сам сделает no-op, и команда должна работать на dev-машине.
             if [[ "${AWG_SKIP_APPLY:-0}" != "1" ]]; then
-                ensure_amneziawg_kernel_module \
-                    || die "Модуль ядра amneziawg недоступен. Запустите 'manage repair-module' и повторите."
+                # rc=2 (модуль OK, сервис не поднялся) не блокирует remove -
+                # симметрично add: apply_config сам явно сообщит о неприменении.
+                ensure_amneziawg_kernel_module; _mod_rc=$?
+                if [[ "$_mod_rc" -eq 1 ]]; then
+                    die "Модуль ядра amneziawg недоступен. Запустите 'manage repair-module' и повторите."
+                elif [[ "$_mod_rc" -eq 2 ]]; then
+                    log_warn "Сервис awg-quick@awg0 не активен - конфиг будет записан, но применение может не сработать."
+                fi
             fi
 
             _removed=0
@@ -1868,12 +1880,23 @@ case $COMMAND in
         # требовать пересборки DKMS. Здесь разрешаем apt-установку headers
         # (AWG_ALLOW_APT_IN_ENSURE=1) — пользователь явно запросил восстановление.
         log "Восстановление модуля ядра amneziawg (может занять до 5 минут — DKMS rebuild)..."
-        if AWG_ALLOW_APT_IN_ENSURE=1 ensure_amneziawg_kernel_module full; then
-            log "Модуль ядра amneziawg восстановлен, сервис awg-quick@awg0 активен."
-        else
-            log_error "Не удалось восстановить модуль ядра. См. лог выше; при необходимости выполните ручное восстановление."
-            _cmd_rc=1
-        fi
+        AWG_ALLOW_APT_IN_ENSURE=1 ensure_amneziawg_kernel_module full; _mod_rc=$?
+        case "$_mod_rc" in
+            0)
+                log "Модуль ядра amneziawg восстановлен, сервис awg-quick@awg0 активен."
+                ;;
+            2)
+                # Раньше этот случай маскировался под успех: "сервис активен" +
+                # exit 0 при лежащем сервисе (Issue #175).
+                log_error "Модуль ядра в порядке, но сервис awg-quick@awg0 НЕ запустился."
+                log_error "Диагностика: systemctl status awg-quick@awg0; journalctl -u awg-quick@awg0 -n 50"
+                _cmd_rc=1
+                ;;
+            *)
+                log_error "Не удалось восстановить модуль ядра. См. лог выше; при необходимости выполните ручное восстановление."
+                _cmd_rc=1
+                ;;
+        esac
         ;;
 
     diagnose)

@@ -94,3 +94,75 @@
     # Exactly one delete call: same-port and empty-prev runs must not delete.
     [ "$(grep -c 'delete allow' <<< "$output")" -eq 1 ]
 }
+
+# ---------------------------------------------------------------------------
+# Fix 3: honest repair-module (rc=2 = module OK, service down)
+# ---------------------------------------------------------------------------
+
+# Run ensure_amneziawg_kernel_module in an isolated bash with stubbed
+# environment: module "loaded" (lsmod fast-path), service start outcome
+# controlled by the _ensure_awg_quick_running stub.
+_run_ensure_module() {
+    local svc_ok="$1" lang_file="$2"
+    bash -c '
+        log() { :; }; log_warn() { :; }; log_error() { :; }; log_debug() { :; }
+        AWG_DIR=$(mktemp -d); export AWG_DIR
+        source "'"$BATS_TEST_DIRNAME"'/../'"$lang_file"'"
+        lsmod() { echo "amneziawg 16384 0"; }
+        _ensure_awg_quick_running() { return '"$svc_ok"'; }
+        ensure_amneziawg_kernel_module full
+        rc=$?
+        rm -rf "$AWG_DIR"
+        exit $rc
+    '
+}
+
+@test "issue #175/3 functional: RU/EN ensure_amneziawg_kernel_module full returns 2 when service fails" {
+    for f in awg_common.sh awg_common_en.sh; do
+        run _run_ensure_module 1 "$f"
+        [ "$status" -eq 2 ]
+    done
+}
+
+@test "issue #175/3 functional: RU/EN ensure_amneziawg_kernel_module full returns 0 when service runs" {
+    for f in awg_common.sh awg_common_en.sh; do
+        run _run_ensure_module 0 "$f"
+        [ "$status" -eq 0 ]
+    done
+}
+
+@test "issue #175/3 functional: module-only mode ignores the service entirely" {
+    for f in awg_common.sh awg_common_en.sh; do
+        run bash -c '
+            log() { :; }; log_warn() { :; }; log_error() { :; }; log_debug() { :; }
+            AWG_DIR=$(mktemp -d); export AWG_DIR
+            source "'"$BATS_TEST_DIRNAME"'/../'"$f"'"
+            lsmod() { echo "amneziawg 16384 0"; }
+            _ensure_awg_quick_running() { return 1; }
+            ensure_amneziawg_kernel_module module-only
+            rc=$?
+            rm -rf "$AWG_DIR"
+            exit $rc
+        '
+        [ "$status" -eq 0 ]
+    done
+}
+
+@test "issue #175/3: RU/EN repair-module distinguishes service failure (rc=2) from module failure" {
+    for f in manage_amneziawg.sh manage_amneziawg_en.sh; do
+        # The branch now contains a nested case (its own ;;), so bound the
+        # block by the next dispatcher command instead of the first ';;'.
+        block=$(awk '/repair-module\|repair\)/,/^    diagnose\)/' "$BATS_TEST_DIRNAME/../$f")
+        [[ "$block" == *'_mod_rc=$?'* ]]
+        [[ "$block" == *'2)'* ]]
+        [[ "$block" == *'_cmd_rc=1'* ]]
+    done
+}
+
+@test "issue #175/3: RU/EN add/remove tolerate rc=2 (module OK, service down) with a warning" {
+    for f in manage_amneziawg.sh manage_amneziawg_en.sh; do
+        # Both callsites must die only on rc=1 and warn on rc=2.
+        [ "$(grep -c '"$_mod_rc" -eq 1' "$BATS_TEST_DIRNAME/../$f")" -eq 2 ]
+        [ "$(grep -c '"$_mod_rc" -eq 2' "$BATS_TEST_DIRNAME/../$f")" -eq 2 ]
+    done
+}

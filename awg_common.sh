@@ -592,6 +592,10 @@ _ensure_awg_quick_running() {
 #   0 — модуль успешно загружен (и в "full" режиме awg-quick активен).
 #   1 — финальный modprobe провалился, либо невалидный режим
 #       (с печатью 4-шагового manual recovery).
+#   2 — только "full": модуль в порядке, но awg-quick@awg0 не стартовал
+#       (сервис-проблема: битый конфиг, занятый порт и т.п.). Раньше это
+#       гасилось в log_warn + return 0, и repair-module рапортовал
+#       "сервис активен" при лежащем сервисе (Issue #175).
 ensure_amneziawg_kernel_module() {
     local mode="${1:-full}"
     case "$mode" in
@@ -607,8 +611,10 @@ ensure_amneziawg_kernel_module() {
     # Fast-path: модуль уже загружен.
     if lsmod 2>/dev/null | awk '{print $1}' | grep -qx 'amneziawg'; then
         if [[ "$mode" == "full" ]]; then
-            _ensure_awg_quick_running awg0 || \
+            _ensure_awg_quick_running awg0 || {
                 log_warn "Модуль активен, но awg-quick@awg0 не стартовал (модуль OK, это сервис-проблема)."
+                return 2
+            }
         fi
         return 0
     fi
@@ -619,8 +625,10 @@ ensure_amneziawg_kernel_module() {
            lsmod 2>/dev/null | awk '{print $1}' | grep -qx 'amneziawg'; then
             log "amneziawg-модуль найден на диске и успешно загружен."
             if [[ "$mode" == "full" ]]; then
-                _ensure_awg_quick_running awg0 || \
+                _ensure_awg_quick_running awg0 || {
                     log_warn "Модуль загружен, но awg-quick@awg0 не стартовал (модуль OK, это сервис-проблема)."
+                    return 2
+                }
             fi
             return 0
         fi
@@ -688,8 +696,10 @@ ensure_amneziawg_kernel_module() {
 
     log "Модуль amneziawg успешно загружен для ядра ${kernel_ver}."
     if [[ "$mode" == "full" ]]; then
-        _ensure_awg_quick_running awg0 || \
+        _ensure_awg_quick_running awg0 || {
             log_warn "Модуль загружен, но awg-quick@awg0 не стартовал (модуль OK, это сервис-проблема)."
+            return 2
+        }
     fi
     return 0
 }

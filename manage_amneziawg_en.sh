@@ -1629,8 +1629,14 @@ case $COMMAND in
         # AWG_SKIP_APPLY=1 (offline/batch edit without apply): skip the module check —
         # apply_config will no-op anyway, and the command must work on a dev machine.
         if [[ "${AWG_SKIP_APPLY:-0}" != "1" ]]; then
-            ensure_amneziawg_kernel_module \
-                || die "amneziawg kernel module unavailable. Run 'manage repair-module' and try again."
+            # rc=2 (module OK, service did not start) does not block add: the
+            # config gets written and apply_config reports the failure itself.
+            ensure_amneziawg_kernel_module; _mod_rc=$?
+            if [[ "$_mod_rc" -eq 1 ]]; then
+                die "amneziawg kernel module unavailable. Run 'manage repair-module' and try again."
+            elif [[ "$_mod_rc" -eq 2 ]]; then
+                log_warn "awg-quick@awg0 service is not active - the config will be written but may not be applied."
+            fi
         fi
 
         # --psk: enable optional PresharedKey for every new client.
@@ -1742,8 +1748,14 @@ case $COMMAND in
             # AWG_SKIP_APPLY=1 (offline/batch edit without apply): skip the module check —
             # apply_config will no-op anyway, and the command must work on a dev machine.
             if [[ "${AWG_SKIP_APPLY:-0}" != "1" ]]; then
-                ensure_amneziawg_kernel_module \
-                    || die "amneziawg kernel module unavailable. Run 'manage repair-module' and try again."
+                # rc=2 (module OK, service did not start) does not block remove -
+                # symmetric with add: apply_config reports the failure itself.
+                ensure_amneziawg_kernel_module; _mod_rc=$?
+                if [[ "$_mod_rc" -eq 1 ]]; then
+                    die "amneziawg kernel module unavailable. Run 'manage repair-module' and try again."
+                elif [[ "$_mod_rc" -eq 2 ]]; then
+                    log_warn "awg-quick@awg0 service is not active - the config will be written but may not be applied."
+                fi
             fi
 
             _removed=0
@@ -1877,12 +1889,23 @@ case $COMMAND in
         # need a DKMS rebuild. Allow apt-installing kernel headers here
         # (AWG_ALLOW_APT_IN_ENSURE=1) — the user explicitly requested repair.
         log "Repairing amneziawg kernel module (may take up to 5 minutes — DKMS rebuild)..."
-        if AWG_ALLOW_APT_IN_ENSURE=1 ensure_amneziawg_kernel_module full; then
-            log "amneziawg kernel module repaired, awg-quick@awg0 service is active."
-        else
-            log_error "Could not repair the kernel module. See log above; manual recovery may be required."
-            _cmd_rc=1
-        fi
+        AWG_ALLOW_APT_IN_ENSURE=1 ensure_amneziawg_kernel_module full; _mod_rc=$?
+        case "$_mod_rc" in
+            0)
+                log "amneziawg kernel module repaired, awg-quick@awg0 service is active."
+                ;;
+            2)
+                # Previously this case masqueraded as success: "service is
+                # active" + exit 0 while the service was down (Issue #175).
+                log_error "The kernel module is fine, but the awg-quick@awg0 service did NOT start."
+                log_error "Diagnostics: systemctl status awg-quick@awg0; journalctl -u awg-quick@awg0 -n 50"
+                _cmd_rc=1
+                ;;
+            *)
+                log_error "Could not repair the kernel module. See log above; manual recovery may be required."
+                _cmd_rc=1
+                ;;
+        esac
         ;;
 
     diagnose)
