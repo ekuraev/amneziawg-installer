@@ -8,14 +8,14 @@ fi
 # ==============================================================================
 # AmneziaWG 2.0 installation and configuration script for Ubuntu/Debian servers
 # Author: @bivlked
-# Version: 5.19.0
-# Date: 2026-07-11
+# Version: 5.19.1
+# Date: 2026-07-13
 # Repository: https://github.com/bivlked/amneziawg-installer
 # ==============================================================================
 
 # --- Safe mode and Constants ---
 set -o pipefail
-SCRIPT_VERSION="5.19.0"
+SCRIPT_VERSION="5.19.1"
 
 AWG_DIR="/root/awg"
 CONFIG_FILE="$AWG_DIR/awgsetup_cfg.init"
@@ -33,8 +33,8 @@ MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 # Verified in step5_download_scripts() after curl.
 # Verification is skipped when AWG_BRANCH is overridden (test branch).
 # Format: sha256sum output (hex, 64 chars).
-COMMON_SCRIPT_SHA256="a06599b917cf979e524f704bc87272860fb0c9544e3dec8a95a6459f55b85d17"
-MANAGE_SCRIPT_SHA256="aff32c77b566d942c188e050d2ce8edf2487d9a21a7ac0f81d18895525419a3c"
+COMMON_SCRIPT_SHA256="b7cfe982573a811a30581c51223227b772d46c2bf79d6affcfb51db6fc612e76"
+MANAGE_SCRIPT_SHA256="6f0d76b072c7fde07907769b338e8852d047d0416649dbd34c4244c0770646e2"
 
 # CLI flags
 UNINSTALL=0; HELP=0; HELP_EXIT_RC=0; DIAGNOSTIC=0; VERBOSE=0; NO_COLOR=0; AUTO_YES=0; NO_TWEAKS=0; NO_CPS=0
@@ -431,6 +431,34 @@ check_os_version() {
     fi
 }
 
+check_kernel_version() {
+    # The AmneziaWG 2.0 module is built via DKMS against the host kernel. On
+    # kernels older than 5.15 (Ubuntu < 22.04, e.g. 5.4 on 20.04) the build
+    # usually fails at step 2 with an opaque package-failure. Warn EXPLICITLY and
+    # early, before updates and reboots (issue #163). Not a die: on some older
+    # kernels the module still builds (HWE and such), so WARN + confirm.
+    local kver kmaj kmin
+    kver=$(uname -r)
+    if [[ "$kver" =~ ^([0-9]+)\.([0-9]+) ]]; then
+        kmaj=${BASH_REMATCH[1]}; kmin=${BASH_REMATCH[2]}
+    else
+        log_warn "Could not parse the kernel version ('$kver') - skipping the minimum-version check."
+        return 0
+    fi
+    if (( kmaj < 5 || (kmaj == 5 && kmin < 15) )); then
+        log_warn "Kernel $kver is older than 5.15 - usually too old for the AmneziaWG 2.0 module."
+        log_warn "The DKMS module build on such a kernel most often fails. Reinstall the VPS on Ubuntu 24.04 LTS or Debian 12 (or newer). Matrix: Ubuntu 24.04/25.10/26.04, Debian 12/13."
+        if [[ "$AUTO_YES" -eq 0 ]]; then
+            read -rp "Continue anyway? [y/N]: " confirm < /dev/tty
+            if ! [[ "$confirm" =~ ^[[:space:]]*[Yy]([Ee][Ss])?[[:space:]]*$ ]]; then die "Cancelled: kernel $kver is too old for the AmneziaWG 2.0 module."; fi
+        else
+            log "Continuing on kernel $kver (--yes)."
+        fi
+    else
+        log "Kernel $kver (OK for the AmneziaWG 2.0 module)."
+    fi
+}
+
 check_free_space() {
     log "Checking disk space..."
     local req=2048
@@ -723,8 +751,12 @@ guard_subnet_change_with_peers() {
     [[ -f "$SERVER_CONF_FILE" ]] || return 0
     grep -q '^\[Peer\]' "$SERVER_CONF_FILE" 2>/dev/null || return 0
     local old_subnet
+    # Address may be dual-stack ("IPv4/n, IPv6/n") in any order - pick the IPv4
+    # element, not just the first comma field (an IPv6-first Address would
+    # otherwise look like a subnet change). No IPv4 -> empty -> fail closed below.
     old_subnet=$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$SERVER_CONF_FILE" 2>/dev/null \
-        | head -n1 | cut -d',' -f1 | tr -d '[:space:]')
+        | tr ',' '\n' | sed 's/[[:space:]]//g' \
+        | grep -m1 -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$')
     if [[ -z "$old_subnet" ]]; then
         # Peers exist but the old subnet cannot be determined - fail closed: a
         # silent continue would re-render the config in the new subnet and break
@@ -1981,6 +2013,7 @@ initialize_setup() {
     log "Log file: $LOG_FILE"
 
     check_os_version
+    check_kernel_version
     check_free_space
 
     local default_port=39743
