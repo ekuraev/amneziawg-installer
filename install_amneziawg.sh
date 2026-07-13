@@ -1518,6 +1518,20 @@ setup_improved_firewall() {
     ssh_ports=$(detect_ssh_ports)
     log "SSH-порт(ы) для правила UFW: ${ssh_ports}"
 
+    # Смена порта при переустановке: удаляем правило старого порта до добавления
+    # нового, иначе старый UDP-порт остаётся открытым навсегда - единственный
+    # другой ufw delete живёт в uninstall и читает уже перезаписанный конфиг
+    # (Issue #175). SSH limit-правила сознательно не трогаем: авто-удаление
+    # SSH-правила при неверно определённом порте отрезало бы доступ к серверу.
+    if [[ -n "${PREV_AWG_PORT:-}" && "$PREV_AWG_PORT" =~ ^[0-9]+$ \
+          && "$PREV_AWG_PORT" != "$AWG_PORT" ]]; then
+        if ufw delete allow "${PREV_AWG_PORT}/udp" >/dev/null 2>&1; then
+            log "UFW: правило старого порта ${PREV_AWG_PORT}/udp удалено (порт изменён на ${AWG_PORT})."
+        else
+            log_warn "UFW: не удалось удалить правило старого порта ${PREV_AWG_PORT}/udp (возможно, правила нет)."
+        fi
+    fi
+
     local ufw_errors=0
     if ufw status 2>/dev/null | grep -q inactive; then
         log "UFW неактивен. Настройка..."
@@ -2034,6 +2048,13 @@ initialize_setup() {
     else
         log "Файл конфигурации $CONFIG_FILE не найден."
     fi
+
+    # Старый порт из awgsetup_cfg.init: нужен шагу 4, чтобы удалить устаревшее
+    # UFW-правило при смене порта (Issue #175). Захват ДО CLI-override, иначе
+    # старое значение теряется навсегда - uninstall читает уже перезаписанный
+    # конфиг и старый порт не узнает.
+    PREV_AWG_PORT=""
+    if [[ "$config_exists" -eq 1 ]]; then PREV_AWG_PORT="$AWG_PORT"; fi
 
     # Переопределение из CLI
     AWG_PORT=${CLI_PORT:-$AWG_PORT}

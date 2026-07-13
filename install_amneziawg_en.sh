@@ -1527,6 +1527,20 @@ setup_improved_firewall() {
     ssh_ports=$(detect_ssh_ports)
     log "SSH port(s) for the UFW rule: ${ssh_ports}"
 
+    # Port change on reinstall: delete the old port's rule before adding the
+    # new one, otherwise the old UDP port stays open forever - the only other
+    # ufw delete lives in uninstall and reads the already rewritten config
+    # (Issue #175). SSH limit rules are deliberately left alone: auto-removing
+    # an SSH rule on a misdetected port would cut off access to the server.
+    if [[ -n "${PREV_AWG_PORT:-}" && "$PREV_AWG_PORT" =~ ^[0-9]+$ \
+          && "$PREV_AWG_PORT" != "$AWG_PORT" ]]; then
+        if ufw delete allow "${PREV_AWG_PORT}/udp" >/dev/null 2>&1; then
+            log "UFW: old port rule ${PREV_AWG_PORT}/udp deleted (port changed to ${AWG_PORT})."
+        else
+            log_warn "UFW: failed to delete the old port rule ${PREV_AWG_PORT}/udp (the rule may not exist)."
+        fi
+    fi
+
     local ufw_errors=0
     if ufw status 2>/dev/null | grep -q inactive; then
         log "UFW is inactive. Configuring..."
@@ -2044,6 +2058,13 @@ initialize_setup() {
     else
         log "Configuration file $CONFIG_FILE not found."
     fi
+
+    # The old port from awgsetup_cfg.init: step 4 needs it to delete the stale
+    # UFW rule on a port change (Issue #175). Captured BEFORE the CLI override,
+    # otherwise the old value is lost for good - uninstall reads the already
+    # rewritten config and never learns the old port.
+    PREV_AWG_PORT=""
+    if [[ "$config_exists" -eq 1 ]]; then PREV_AWG_PORT="$AWG_PORT"; fi
 
     # CLI override
     AWG_PORT=${CLI_PORT:-$AWG_PORT}

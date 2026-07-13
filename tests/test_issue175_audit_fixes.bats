@@ -45,3 +45,52 @@
         [ "$guard_line" -gt "$state_line" ]
     done
 }
+
+# ---------------------------------------------------------------------------
+# Fix 2: stale UFW rule cleanup on port change
+# ---------------------------------------------------------------------------
+
+@test "issue #175/2: RU/EN installer captures PREV_AWG_PORT before the CLI override" {
+    for f in install_amneziawg.sh install_amneziawg_en.sh; do
+        prev_line=$(grep -n 'PREV_AWG_PORT="$AWG_PORT"' "$BATS_TEST_DIRNAME/../$f" | head -1 | cut -d: -f1)
+        # Anchor on the override assignment (skip the parser's --port= line).
+        override_line=$(grep -n 'AWG_PORT=${CLI_PORT:-$AWG_PORT}' "$BATS_TEST_DIRNAME/../$f" | head -1 | cut -d: -f1)
+        [ -n "$prev_line" ] && [ -n "$override_line" ]
+        [ "$prev_line" -lt "$override_line" ]
+    done
+}
+
+@test "issue #175/2: RU/EN setup_improved_firewall deletes the old port rule on change" {
+    for f in install_amneziawg.sh install_amneziawg_en.sh; do
+        block=$(awk '/^setup_improved_firewall\(\)/,/^}/' "$BATS_TEST_DIRNAME/../$f")
+        [[ "$block" == *'ufw delete allow "${PREV_AWG_PORT}/udp"'* ]]
+        # Guarded: numeric check + only when the port actually changed.
+        [[ "$block" == *'"$PREV_AWG_PORT" != "$AWG_PORT"'* ]]
+        [[ "$block" == *'^[0-9]+$'* ]]
+    done
+}
+
+@test "issue #175/2 functional: firewall block deletes old rule only when port changed" {
+    # Extract the deletion guard and run it with a stubbed ufw to verify both
+    # directions: changed port -> delete called; same port -> no delete.
+    local guard
+    guard=$(awk '/Смена порта при переустановке/,/^    fi$/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh" | grep -v '^    #')
+    [ -n "$guard" ]
+
+    run bash -c '
+        calls_file=$(mktemp)
+        ufw() { echo "$*" >> "$calls_file"; return 0; }
+        log() { :; }; log_warn() { :; }
+        PREV_AWG_PORT=51820; AWG_PORT=443
+        '"$guard"'
+        PREV_AWG_PORT=443; AWG_PORT=443
+        '"$guard"'
+        PREV_AWG_PORT=""; AWG_PORT=443
+        '"$guard"'
+        cat "$calls_file"; rm -f "$calls_file"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'delete allow 51820/udp'* ]]
+    # Exactly one delete call: same-port and empty-prev runs must not delete.
+    [ "$(grep -c 'delete allow' <<< "$output")" -eq 1 ]
+}
