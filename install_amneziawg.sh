@@ -2245,6 +2245,22 @@ EOF
         log "Начало с шага 1."
         update_state 1
     fi
+
+    # Stale state (прерванный шаг 7 оставляет setup_state=7/99) + CLI-параметры,
+    # влияющие на firewall/конфиги: без отката цикл пропустил бы шаги 4-6, новые
+    # значения остались бы только в awgsetup_cfg.init, а awg0.conf, клиентские
+    # конфиги и правила UFW продолжили бы жить со старыми - молча (Issue #175).
+    # Возврат к шагу 4: firewall (порт) + перегенерация конфигов (шаг 6).
+    if (( current_step > 4 )) && { [[ -n "$CLI_PORT" ]] || [[ -n "$CLI_SUBNET" ]] \
+        || [[ -n "$CLI_SSH_PORT" ]] || [[ "$CLI_ROUTING_MODE" != "default" ]] \
+        || [[ -n "$CLI_ENDPOINT" ]] || [[ "$CLI_DISABLE_IPV6" != "default" ]] \
+        || [[ "${CLI_ALLOW_IPV6_TUNNEL:-0}" -eq 1 ]] || [[ -n "${CLI_PRESET:-}" ]] \
+        || [[ -n "${CLI_JC:-}" ]] || [[ -n "${CLI_JMIN:-}" ]] || [[ -n "${CLI_JMAX:-}" ]] \
+        || [[ "${CLI_NO_CPS:-0}" -eq 1 ]]; }; then
+        log_warn "Незавершённая установка (шаг $current_step) + CLI-параметры конфигурации: возврат к шагу 4, чтобы firewall и конфиги были перегенерированы с новыми значениями."
+        current_step=4
+        update_state 4
+    fi
     log "Шаг 0 завершен."
 }
 

@@ -2258,6 +2258,22 @@ EOF
         log "Starting from step 1."
         update_state 1
     fi
+
+    # Stale state (an interrupted step 7 leaves setup_state=7/99) + CLI flags
+    # affecting the firewall/configs: without the rollback the loop would skip
+    # steps 4-6, the new values would live only in awgsetup_cfg.init while
+    # awg0.conf, client configs and UFW rules silently kept the old ones
+    # (Issue #175). Roll back to step 4: firewall (port) + config regen (step 6).
+    if (( current_step > 4 )) && { [[ -n "$CLI_PORT" ]] || [[ -n "$CLI_SUBNET" ]] \
+        || [[ -n "$CLI_SSH_PORT" ]] || [[ "$CLI_ROUTING_MODE" != "default" ]] \
+        || [[ -n "$CLI_ENDPOINT" ]] || [[ "$CLI_DISABLE_IPV6" != "default" ]] \
+        || [[ "${CLI_ALLOW_IPV6_TUNNEL:-0}" -eq 1 ]] || [[ -n "${CLI_PRESET:-}" ]] \
+        || [[ -n "${CLI_JC:-}" ]] || [[ -n "${CLI_JMIN:-}" ]] || [[ -n "${CLI_JMAX:-}" ]] \
+        || [[ "${CLI_NO_CPS:-0}" -eq 1 ]]; }; then
+        log_warn "Unfinished install (step $current_step) + configuration CLI flags: rolling back to step 4 so the firewall and configs are regenerated with the new values."
+        current_step=4
+        update_state 4
+    fi
     log "Step 0 completed."
 }
 
