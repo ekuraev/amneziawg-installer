@@ -595,7 +595,7 @@ _ensure_awg_quick_running() {
 #   0 — module loaded successfully (and in "full" mode awg-quick is active).
 #   1 — final modprobe failed, or invalid mode argument
 #       (with a 4-step manual recovery printed to the log).
-#   2 — "full" mode only: the module is fine but awg-quick@awg0 did not
+#   2 - "full" mode only: the module is fine but awg-quick@awg0 did not
 #       start (a service problem: broken config, busy port, etc.).
 #       Previously this was swallowed into log_warn + return 0 and
 #       repair-module claimed "service is active" while it was down
@@ -743,7 +743,7 @@ safe_load_config() {
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
                 AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|NO_CPS|\
-                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6)
+                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6|PREV_AWG_PORT)
                     export "$key=$value"
                     ;;
             esac

@@ -50,9 +50,9 @@
 # Fix 2: stale UFW rule cleanup on port change
 # ---------------------------------------------------------------------------
 
-@test "issue #175/2: RU/EN installer captures PREV_AWG_PORT before the CLI override" {
+@test "issue #175/2: RU/EN installer captures the config port before the CLI override" {
     for f in install_amneziawg.sh install_amneziawg_en.sh; do
-        prev_line=$(grep -n 'PREV_AWG_PORT="$AWG_PORT"' "$BATS_TEST_DIRNAME/../$f" | head -1 | cut -d: -f1)
+        prev_line=$(grep -n '_cfg_awg_port="$AWG_PORT"' "$BATS_TEST_DIRNAME/../$f" | head -1 | cut -d: -f1)
         # Anchor on the override assignment (skip the parser's --port= line).
         override_line=$(grep -n 'AWG_PORT=${CLI_PORT:-$AWG_PORT}' "$BATS_TEST_DIRNAME/../$f" | head -1 | cut -d: -f1)
         [ -n "$prev_line" ] && [ -n "$override_line" ]
@@ -93,6 +93,128 @@
     [[ "$output" == *'delete allow 51820/udp'* ]]
     # Exactly one delete call: same-port and empty-prev runs must not delete.
     [ "$(grep -c 'delete allow' <<< "$output")" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
+# Fix 2 (PR #176 review): PREV_AWG_PORT must survive the step-1/step-2 reboots.
+# A plain shell variable dies at request_reboot, so the pending delete is
+# persisted in awgsetup_cfg.init and removed only after a successful
+# ufw delete.
+# ---------------------------------------------------------------------------
+
+@test "issue #175/2 reboot: RU/EN installer persists PREV_AWG_PORT into the saved config" {
+    for f in install_amneziawg.sh install_amneziawg_en.sh; do
+        # The save block must append the key to the temp config before mv,
+        # guarded by a numeric check.
+        block=$(grep -B1 -A1 'echo "export PREV_AWG_PORT=' "$BATS_TEST_DIRNAME/../$f")
+        [[ "$block" == *'"$PREV_AWG_PORT" =~ ^[0-9]+$'* ]]
+        [[ "$block" == *'>> "$temp_conf"'* ]]
+    done
+}
+
+@test "issue #175/2 reboot: RU/EN safe_load_config whitelists PREV_AWG_PORT in all four copies" {
+    for f in awg_common.sh awg_common_en.sh install_amneziawg.sh install_amneziawg_en.sh; do
+        run grep -c '|PREV_AWG_PORT)' "$BATS_TEST_DIRNAME/../$f"
+        [ "$status" -eq 0 ]
+        [ "$output" -ge 1 ]
+    done
+}
+
+@test "issue #175/2 reboot functional: RU/EN awg_common safe_load_config exports PREV_AWG_PORT" {
+    for f in awg_common.sh awg_common_en.sh; do
+        run bash -c '
+            log() { :; }; log_warn() { :; }; log_error() { :; }; log_debug() { :; }
+            AWG_DIR=$(mktemp -d); export AWG_DIR
+            source "'"$BATS_TEST_DIRNAME"'/../'"$f"'"
+            cfg=$(mktemp)
+            printf "export AWG_PORT=443\nexport PREV_AWG_PORT=51820\n" > "$cfg"
+            unset PREV_AWG_PORT
+            safe_load_config "$cfg"
+            rc_val="${PREV_AWG_PORT:-UNSET}"
+            rm -rf "$cfg" "$AWG_DIR"
+            echo "PREV_AWG_PORT=$rc_val"
+        '
+        [ "$status" -eq 0 ]
+        [[ "$output" == *'PREV_AWG_PORT=51820'* ]]
+    done
+}
+
+@test "issue #175/2 reboot functional: capture logic keeps a pending delete across resumed runs" {
+    for f in install_amneziawg.sh install_amneziawg_en.sh; do
+        snippet=$(awk '/PREV_AWG_PORT="\$\{PREV_AWG_PORT:-\}"/,/"\$PREV_AWG_PORT" == "\$AWG_PORT" \]\]; then PREV_AWG_PORT=""; fi/' \
+            "$BATS_TEST_DIRNAME/../$f" | grep -v '^[[:space:]]*#')
+        [ -n "$snippet" ]
+        run bash -c '
+            # Run 1: a finished install (config port 51820), --port=443.
+            PREV_AWG_PORT=""; config_exists=1; AWG_PORT=51820; CLI_PORT=443
+            '"$snippet"'
+            echo "run1=$PREV_AWG_PORT"
+            # Run 2 (after reboot): the config already holds 443, the pending
+            # value 51820 arrives via safe_load_config and must survive.
+            PREV_AWG_PORT=51820; config_exists=1; AWG_PORT=443; CLI_PORT=""
+            '"$snippet"'
+            echo "run2=$PREV_AWG_PORT"
+            # Port changed back before the delete happened: the stale pending
+            # value must not linger once it equals the active port.
+            PREV_AWG_PORT=443; config_exists=1; AWG_PORT=443; CLI_PORT=""
+            '"$snippet"'
+            echo "run3=${PREV_AWG_PORT:-EMPTY}"
+        '
+        [ "$status" -eq 0 ]
+        [[ "$output" == *'run1=51820'* ]]
+        [[ "$output" == *'run2=51820'* ]]
+        [[ "$output" == *'run3=EMPTY'* ]]
+    done
+}
+
+@test "issue #175/2 reboot: RU/EN firewall clears the persisted key only on successful delete" {
+    for f in install_amneziawg.sh install_amneziawg_en.sh; do
+        block=$(awk '/^setup_improved_firewall\(\)/,/^}/' "$BATS_TEST_DIRNAME/../$f")
+        # The sed cleanup must live inside the success branch of ufw delete.
+        [[ "$block" == *"sed -i '/^export PREV_AWG_PORT=/d'"* ]]
+        success_branch=$(printf '%s\n' "$block" \
+            | awk '/if ufw delete allow "\$\{PREV_AWG_PORT\}\/udp"/,/else/')
+        [[ "$success_branch" == *'sed -i'* ]]
+    done
+}
+
+@test "issue #175/2 reboot functional: failed ufw delete keeps the persisted key for a retry" {
+    # Extract the deletion guard and run it against a real config file with a
+    # stubbed ufw: success removes the key, failure leaves it in place.
+    local guard
+    guard=$(awk '/Смена порта при переустановке/,/^    fi$/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh" | grep -v '^    #')
+    [ -n "$guard" ]
+
+    # The cleanup uses GNU sed -i syntax (the scripts target Linux servers).
+    sed --version >/dev/null 2>&1 || skip "GNU sed required"
+
+    run bash -c '
+        log() { :; }; log_warn() { :; }
+        CONFIG_FILE=$(mktemp)
+        echo "export PREV_AWG_PORT=51820" > "$CONFIG_FILE"
+        # Failure: the key must survive for the next run.
+        ufw() { return 1; }
+        PREV_AWG_PORT=51820; AWG_PORT=443
+        '"$guard"'
+        if grep -q "^export PREV_AWG_PORT=" "$CONFIG_FILE"; then
+            echo "fail-branch=kept"
+        else
+            echo "fail-branch=gone"
+        fi
+        # Success: the key must be removed.
+        ufw() { return 0; }
+        PREV_AWG_PORT=51820; AWG_PORT=443
+        '"$guard"'
+        if grep -q "^export PREV_AWG_PORT=" "$CONFIG_FILE"; then
+            echo "success-branch=kept"
+        else
+            echo "success-branch=gone"
+        fi
+        rm -f "$CONFIG_FILE"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'fail-branch=kept'* ]]
+    [[ "$output" == *'success-branch=gone'* ]]
 }
 
 # ---------------------------------------------------------------------------

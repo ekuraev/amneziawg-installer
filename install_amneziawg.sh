@@ -33,7 +33,7 @@ MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 # Проверяются в step5_download_scripts() после curl.
 # Если AWG_BRANCH переопределён (не v$SCRIPT_VERSION), проверка пропускается.
 # Формат: sha256sum output (hex, 64 chars).
-COMMON_SCRIPT_SHA256="6a44e929415fdc8c52601212ce48e6c9b8d33f6c2f53e0d194a6cbb65401f93b"
+COMMON_SCRIPT_SHA256="be0f3f4b0461a75d092ab7e90c00e2fe46bf5c37795095184a8023511f126840"
 MANAGE_SCRIPT_SHA256="ae71cd37ec760a6352e0b2309629a769052874c1d5875bd4cf5b1a9c9416d1da"
 
 # Флаги CLI
@@ -648,7 +648,7 @@ safe_load_config() {
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
                 AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|NO_CPS|\
-                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6)
+                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6|PREV_AWG_PORT)
                     export "$key=$value"
                     ;;
             esac
@@ -1527,8 +1527,14 @@ setup_improved_firewall() {
           && "$PREV_AWG_PORT" != "$AWG_PORT" ]]; then
         if ufw delete allow "${PREV_AWG_PORT}/udp" >/dev/null 2>&1; then
             log "UFW: правило старого порта ${PREV_AWG_PORT}/udp удалено (порт изменён на ${AWG_PORT})."
+            # Успех - снимаем отложенное удаление из awgsetup_cfg.init. При
+            # неудаче ключ остаётся: следующий запуск повторит попытку, а не
+            # потеряет её навсегда (PR #176).
+            sed -i '/^export PREV_AWG_PORT=/d' "$CONFIG_FILE" 2>/dev/null \
+                || log_warn "Не удалось убрать PREV_AWG_PORT из $CONFIG_FILE."
+            PREV_AWG_PORT=""
         else
-            log_warn "UFW: не удалось удалить правило старого порта ${PREV_AWG_PORT}/udp (возможно, правила нет)."
+            log_warn "UFW: не удалось удалить правило старого порта ${PREV_AWG_PORT}/udp (возможно, правила нет). Попытка повторится при следующем запуске установки."
         fi
     fi
 
@@ -2052,12 +2058,23 @@ initialize_setup() {
     # Старый порт из awgsetup_cfg.init: нужен шагу 4, чтобы удалить устаревшее
     # UFW-правило при смене порта (Issue #175). Захват ДО CLI-override, иначе
     # старое значение теряется навсегда - uninstall читает уже перезаписанный
-    # конфиг и старый порт не узнает.
-    PREV_AWG_PORT=""
-    if [[ "$config_exists" -eq 1 ]]; then PREV_AWG_PORT="$AWG_PORT"; fi
+    # конфиг и старый порт не узнает. PREV_AWG_PORT мог уже загрузиться из
+    # awgsetup_cfg.init через safe_load_config - это отложенное удаление с
+    # прошлого запуска: шаг 1 завершается request_reboot, до шага 4 доживает
+    # только значение, записанное на диск (PR #176).
+    PREV_AWG_PORT="${PREV_AWG_PORT:-}"
+    _cfg_awg_port=""
+    if [[ "$config_exists" -eq 1 ]]; then _cfg_awg_port="$AWG_PORT"; fi
 
     # Переопределение из CLI
     AWG_PORT=${CLI_PORT:-$AWG_PORT}
+    # Порт изменился этим запуском - прежнее значение становится отложенным
+    # удалением. Если порт вернули обратно (совпал с отложенным) - удаление
+    # снимается: правило снова нужно.
+    if [[ -n "$_cfg_awg_port" && "$_cfg_awg_port" != "$AWG_PORT" ]]; then
+        PREV_AWG_PORT="$_cfg_awg_port"
+    fi
+    if [[ "$PREV_AWG_PORT" == "$AWG_PORT" ]]; then PREV_AWG_PORT=""; fi
     AWG_TUNNEL_SUBNET=${CLI_SUBNET:-$AWG_TUNNEL_SUBNET}
     if [[ "$CLI_DISABLE_IPV6" != "default" ]]; then DISABLE_IPV6=$CLI_DISABLE_IPV6; fi
     if [[ "$CLI_ROUTING_MODE" != "default" ]]; then
@@ -2231,6 +2248,14 @@ export ALLOW_IPV6_TUNNEL=${ALLOW_IPV6_TUNNEL:-0}
 export IPV6_SUBNET='${IPV6_SUBNET}'
 export SERVER_HAS_NATIVE_IPV6=${SERVER_HAS_NATIVE_IPV6:-0}
 EOF
+    # Отложенное удаление UFW-правила старого порта обязано пережить reboot:
+    # шаг 4 выполняется в другом процессе после 1-2 перезагрузок, переменная
+    # процесса до него не доживает (PR #176). Ключ снимает
+    # setup_improved_firewall после успешного ufw delete.
+    if [[ "$PREV_AWG_PORT" =~ ^[0-9]+$ ]]; then
+        echo "export PREV_AWG_PORT=${PREV_AWG_PORT}" >> "$temp_conf" \
+            || die "Ошибка записи PREV_AWG_PORT в $temp_conf"
+    fi
     if ! mv "$temp_conf" "$CONFIG_FILE"; then
         rm -f "$temp_conf"
         die "Ошибка сохранения $CONFIG_FILE"
@@ -2249,6 +2274,13 @@ EOF
     if [[ "$config_exists" -eq 1 && "$CLI_ROUTING_MODE" != "default" ]]; then
         log_warn "Режим маршрутизации изменён. Существующие клиентские конфиги сохраняют старые AllowedIPs."
         log_warn "Применить новый режим ко всем клиентам: sudo bash $MANAGE_SCRIPT_PATH regen --reset-routes"
+    fi
+    # Смена порта: шаг 6 пропускает уже существующих клиентов, их Endpoint
+    # остаётся со старым портом и они молча перестают подключаться. Подсказываем
+    # явный перевыпуск - по аналогии с предупреждением о смене режима (#170).
+    if [[ "$config_exists" -eq 1 && -n "$PREV_AWG_PORT" ]]; then
+        log_warn "Порт изменён (${PREV_AWG_PORT} -> ${AWG_PORT}). Существующие клиентские конфиги сохраняют старый порт в Endpoint и потеряют связь."
+        log_warn "Перевыпустить всех клиентов: sudo bash $MANAGE_SCRIPT_PATH regen"
     fi
 
     # Загрузка состояния
