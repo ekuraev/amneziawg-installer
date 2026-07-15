@@ -33,10 +33,12 @@
         tunnel_network_cidr 10.9.0.1/16
         tunnel_network_cidr 172.16.5.1/30
         tunnel_network_cidr not-a-cidr || echo "rejected"
+        tunnel_network_cidr 300.1.1.1/24 || echo "rejected-octet"
     '
     [ "$status" -eq 0 ]
     [[ "${lines[0]}" == "10.9.9.0/24" ]]
     [[ "${lines[1]}" == "10.9.0.0/16" ]]
     [[ "${lines[2]}" == "172.16.5.0/30" ]]
     [[ "${lines[3]}" == "rejected" ]]
+    [[ "${lines[4]}" == "rejected-octet" ]]
 }

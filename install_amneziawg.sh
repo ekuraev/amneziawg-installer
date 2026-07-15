@@ -744,6 +744,8 @@ tunnel_network_cidr() {
     fi
     local a="${BASH_REMATCH[1]}" b="${BASH_REMATCH[2]}" c="${BASH_REMATCH[3]}" d="${BASH_REMATCH[4]}" prefix="${BASH_REMATCH[5]}"
     (( 10#$prefix <= 32 )) || return 1
+    local o
+    for o in "$a" "$b" "$c" "$d"; do (( 10#$o <= 255 )) || return 1; done
     local ip=$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))
     local mask
     if (( 10#$prefix == 0 )); then mask=0; else mask=$(( (0xFFFFFFFF << (32 - 10#$prefix)) & 0xFFFFFFFF )); fi
