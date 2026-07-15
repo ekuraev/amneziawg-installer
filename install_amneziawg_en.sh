@@ -33,7 +33,7 @@ MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 # Verified in step5_download_scripts() after curl.
 # Verification is skipped when AWG_BRANCH is overridden (test branch).
 # Format: sha256sum output (hex, 64 chars).
-COMMON_SCRIPT_SHA256="57d053e0be5124664f7846580a2bee6d546b6f2e05dcf8a38c193c035a90cbab"
+COMMON_SCRIPT_SHA256="aa07f7dd56f6885db2476e29da567b40cf3494b3d3fa2f74d69e492079c52f8d"
 MANAGE_SCRIPT_SHA256="9df756c7ab089cd0861300ca116506ef694877481dbcd0ec2d8af2c5962052a0"
 
 # CLI flags
@@ -43,6 +43,7 @@ _APT_UPDATED=0
 CLI_PORT=""; CLI_SUBNET=""; CLI_DISABLE_IPV6="default"; CLI_SSH_PORT=""
 CLI_ROUTING_MODE="default"; CLI_CUSTOM_ROUTES=""; CLI_ENDPOINT=""; CLI_NO_TWEAKS=0; CLI_NO_CPS=0
 CLI_ALLOW_IPV6_TUNNEL=0
+CLI_ISOLATION="default"
 
 # --- Auto-cleanup of temporary files ---
 _install_temp_files=()
@@ -85,6 +86,7 @@ while [[ $# -gt 0 ]]; do
         --route-all)     CLI_ROUTING_MODE=1 ;;
         --route-amnezia) CLI_ROUTING_MODE=2 ;;
         --route-custom=*) CLI_ROUTING_MODE=3; CLI_CUSTOM_ROUTES="${1#*=}" ;;
+        --isolation=*)   CLI_ISOLATION="${1#*=}" ;;
         --endpoint=*)    CLI_ENDPOINT="${1#*=}" ;;
         --yes|-y)        AUTO_YES=1 ;;
         --no-tweaks)     NO_TWEAKS=1; CLI_NO_TWEAKS=1 ;;
@@ -290,6 +292,8 @@ Options:
   --route-all           Use 'All traffic' mode non-interactively
   --route-amnezia       Use 'Amnezia' mode non-interactively
   --route-custom=NETS   Use 'Custom' mode non-interactively
+  --isolation=on|off    Isolate VPN clients from each other (default on).
+                        off: the tunnel subnet is added to client AllowedIPs
   --endpoint=ADDR       External server endpoint: FQDN, IPv4 or [IPv6] (NAT)
   -y, --yes             Auto-confirm (reboots, UFW, etc.)
   -f, --force           Force reinstall on top of an already-running AmneziaWG
@@ -654,7 +658,7 @@ safe_load_config() {
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
                 AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|NO_CPS|\
-                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6|PREV_AWG_PORT)
+                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6|PREV_AWG_PORT|CLIENT_ISOLATION)
                     export "$key=$value"
                     ;;
             esac
@@ -734,6 +738,80 @@ validate_subnet() {
     fi
     # Normalize the global to <network+1>/<prefix> (server = network+1).
     AWG_TUNNEL_SUBNET="${srv}/${prefix}"
+}
+
+# Tunnel network from a CIDR string (<network+1>/<prefix> -> <network>/<prefix>).
+# Needed for client isolation (issue #178): with isolation disabled, it is the
+# network address itself that goes into client AllowedIPs. Self-contained
+# (step 0, BEFORE awg_common.sh is loaded): does not use _cidr_bounds/_int_to_ipv4.
+tunnel_network_cidr() {
+    local subnet="${1:-$AWG_TUNNEL_SUBNET}"
+    if ! [[ "$subnet" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})/([0-9]{1,2})$ ]]; then
+        return 1
+    fi
+    local a="${BASH_REMATCH[1]}" b="${BASH_REMATCH[2]}" c="${BASH_REMATCH[3]}" d="${BASH_REMATCH[4]}" prefix="${BASH_REMATCH[5]}"
+    (( 10#$prefix <= 32 )) || return 1
+    local o
+    for o in "$a" "$b" "$c" "$d"; do (( 10#$o <= 255 )) || return 1; done
+    local ip=$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))
+    local mask
+    if (( 10#$prefix == 0 )); then mask=0; else mask=$(( (0xFFFFFFFF << (32 - 10#$prefix)) & 0xFFFFFFFF )); fi
+    local net=$(( ip & mask ))
+    echo "$(( (net >> 24) & 255 )).$(( (net >> 16) & 255 )).$(( (net >> 8) & 255 )).$(( net & 255 ))/${prefix}"
+}
+
+# Explicit client isolation choice (issue #178). Priority:
+# CLI flag > saved config > interactive question (first run only, no --yes) >
+# 1 (isolated). An old config without the key = 1: before this feature,
+# split modes were isolated de facto, so the behaviour is preserved.
+configure_client_isolation() {
+    case "$CLI_ISOLATION" in
+        on)  CLIENT_ISOLATION=1; log "Client isolation from CLI: enabled." ;;
+        off) CLIENT_ISOLATION=0; log "Client isolation from CLI: disabled." ;;
+        default)
+            if [[ -n "${CLIENT_ISOLATION:-}" ]]; then
+                log "Client isolation (from config): $( [[ "$CLIENT_ISOLATION" -eq 1 ]] && echo enabled || echo disabled )."
+            elif [[ "${config_exists:-0}" -eq 1 ]]; then
+                CLIENT_ISOLATION=1
+                log "Client isolation: enabled (pre-v5.20 config - previous behaviour)."
+            elif [[ "$AUTO_YES" -eq 1 ]]; then
+                CLIENT_ISOLATION=1
+                log "Client isolation: enabled (--yes, default)."
+            else
+                local r_iso
+                read -rp "Isolate VPN clients from each other? [Y/n]: " r_iso < /dev/tty
+                case "$r_iso" in
+                    [nN]*) CLIENT_ISOLATION=0; log "Client isolation disabled: clients will see each other inside the VPN." ;;
+                    *)     CLIENT_ISOLATION=1; log "Client isolation enabled." ;;
+                esac
+            fi
+            ;;
+        *) die "Invalid --isolation='$CLI_ISOLATION'. Allowed: on|off." ;;
+    esac
+    export CLIENT_ISOLATION
+}
+
+# Brings ALLOWED_IPS in line with CLIENT_ISOLATION (idempotent, called on every
+# run after the routing mode is determined). Isolation OFF: the tunnel subnet
+# is appended to the list (modes 2/3; in mode 1, 0.0.0.0/0 already covers it).
+# Isolation ON: our token is removed from mode 2 (off->on round-trip); mode 3
+# is left untouched - the custom list belongs to the user, and isolation is
+# enforced by the server-side DROP rule regardless.
+_apply_isolation_to_allowed_ips() {
+    local net
+    net=$(tunnel_network_cidr "$AWG_TUNNEL_SUBNET") || return 0
+    local compact=",${ALLOWED_IPS// /},"
+    if [[ "${CLIENT_ISOLATION:-1}" -eq 0 ]]; then
+        [[ "$ALLOWED_IPS_MODE" == "1" ]] && return 0
+        [[ "$compact" == *",${net},"* ]] && return 0
+        ALLOWED_IPS="${ALLOWED_IPS}, ${net}"
+        log "Isolation disabled: tunnel subnet ${net} added to client AllowedIPs."
+    elif [[ "$ALLOWED_IPS_MODE" == "2" && "$compact" == *",${net},"* ]]; then
+        compact="${compact/,${net},/,}"
+        compact="${compact#,}"; compact="${compact%,}"
+        ALLOWED_IPS="${compact//,/, }"
+        log "Isolation enabled: tunnel subnet ${net} removed from client AllowedIPs."
+    fi
 }
 
 # Subnet-change guard: [Peer] blocks are carried over verbatim on reinstall
@@ -2047,6 +2125,7 @@ initialize_setup() {
     ALLOWED_IPS_MODE="default"
     ALLOWED_IPS=""
     AWG_ENDPOINT=""
+    CLIENT_ISOLATION=""
 
     # Load config
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -2075,6 +2154,12 @@ initialize_setup() {
     PREV_AWG_PORT="${PREV_AWG_PORT:-}"
     _cfg_awg_port=""
     if [[ "$config_exists" -eq 1 ]]; then _cfg_awg_port="$AWG_PORT"; fi
+
+    # Previous isolation value - for the change warning (issue #178).
+    # A legacy config without the key = 1 (isolated): otherwise a legacy ->
+    # --isolation=off transition would not warn about regen.
+    _cfg_client_isolation=""
+    if [[ "$config_exists" -eq 1 ]]; then _cfg_client_isolation="${CLIENT_ISOLATION:-1}"; fi
 
     # CLI override
     AWG_PORT=${CLI_PORT:-$AWG_PORT}
@@ -2164,6 +2249,12 @@ initialize_setup() {
     if [[ "$ALLOWED_IPS_MODE" == "default" ]]; then ALLOWED_IPS_MODE=2; fi
     if [[ -z "$ALLOWED_IPS" ]]; then configure_routing_mode; fi
 
+    # Client isolation (issue #178): choice + AllowedIPs alignment. Called
+    # before validate_cidr_list below - an appended subnet goes through the
+    # same mandatory validation as the rest of the list.
+    configure_client_isolation
+    _apply_isolation_to_allowed_ips
+
     # Single mandatory AllowedIPs validation before saving the config: CLI
     # --route-custom on a first run assigned ALLOWED_IPS without checking it
     # (configure_routing_mode was skipped because the mode was already 3).
@@ -2234,6 +2325,7 @@ export AWG_TUNNEL_SUBNET='${AWG_TUNNEL_SUBNET}'
 export DISABLE_IPV6=${DISABLE_IPV6}
 export ALLOWED_IPS_MODE=${ALLOWED_IPS_MODE}
 export ALLOWED_IPS='${ALLOWED_IPS}'
+export CLIENT_ISOLATION=${CLIENT_ISOLATION:-1}
 export AWG_ENDPOINT='${AWG_ENDPOINT}'
 export AWG_MTU=${AWG_MTU:-1280}
 # AWG 2.0 Parameters
@@ -2288,6 +2380,14 @@ EOF
         log_warn "Routing mode changed. Existing client configs keep their old AllowedIPs."
         log_warn "Apply the new mode to all clients: sudo bash $MANAGE_SCRIPT_PATH regen --reset-routes"
     fi
+    # Isolation change - the same operation on client configs as a routing
+    # mode change: new clients get the new list, existing ones only via
+    # regen --reset-routes (issue #178).
+    if [[ "$config_exists" -eq 1 && -n "$_cfg_client_isolation" \
+          && "$_cfg_client_isolation" != "$CLIENT_ISOLATION" ]]; then
+        log_warn "Client isolation mode changed. Existing client configs keep their old AllowedIPs."
+        log_warn "Apply the new mode to all clients: sudo bash $MANAGE_SCRIPT_PATH regen --reset-routes"
+    fi
     # Port change: step 6 skips clients that already exist, their Endpoint
     # keeps the old port and they silently stop connecting. Hint the explicit
     # reissue - mirrors the routing-mode change warning (#170).
@@ -2322,6 +2422,7 @@ EOF
         || [[ -n "$CLI_ENDPOINT" ]] || [[ "$CLI_DISABLE_IPV6" != "default" ]] \
         || [[ "${CLI_ALLOW_IPV6_TUNNEL:-0}" -eq 1 ]] || [[ -n "${CLI_PRESET:-}" ]] \
         || [[ -n "${CLI_JC:-}" ]] || [[ -n "${CLI_JMIN:-}" ]] || [[ -n "${CLI_JMAX:-}" ]] \
+        || [[ "${CLI_ISOLATION:-default}" != "default" ]] \
         || [[ "${CLI_NO_CPS:-0}" -eq 1 ]]; }; then
         log_warn "Unfinished install (step $current_step) + configuration CLI flags: rolling back to step 4 so the firewall and configs are regenerated with the new values."
         current_step=4
@@ -3326,6 +3427,17 @@ step7_start_service() {
     log "### STEP 7: Service startup and security configuration ###"
 
     log "Enabling and starting awg-quick@awg0..."
+
+    # Isolation switched on->off: the new config's PostDown no longer has the
+    # DROP rule to remove, and the restart's down phase already runs against
+    # the new on-disk config. Remove stale rules explicitly, in a loop - a
+    # repeated interrupted run may have left more than one (issue #178,
+    # same deferred-cleanup pattern as PREV_AWG_PORT in #175).
+    if [[ "${CLIENT_ISOLATION:-1}" -eq 0 ]]; then
+        while iptables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done
+        while ip6tables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done
+    fi
+
     if systemctl is-active --quiet awg-quick@awg0; then
         log "Service already active — restarting to apply configuration..."
         systemctl enable awg-quick@awg0 || log_warn "Failed to enable awg-quick@awg0 — check autostart manually"
