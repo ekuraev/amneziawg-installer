@@ -166,3 +166,36 @@
         [ "$drop_line" -gt "$accept_first" ]
     done
 }
+
+# ---------------------------------------------------------------------------
+# Stale DROP cleanup (on->off reinstall)
+# ---------------------------------------------------------------------------
+
+@test "issue #178: step7 removes stale DROP rules when isolation is off (RU/EN)" {
+    for f in install_amneziawg.sh install_amneziawg_en.sh; do
+        block=$(awk '/^step7_start_service\(\)/,/^}/' "$BATS_TEST_DIRNAME/../$f")
+        [[ "$block" == *'while iptables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done'* ]]
+        [[ "$block" == *'while ip6tables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done'* ]]
+        [[ "$block" == *'CLIENT_ISOLATION'* ]]
+    done
+}
+
+@test "issue #178 functional: cleanup loop drains duplicates and only runs when off" {
+    block=$(awk '/Переключение изоляции on->off/,/^    fi$/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh" | grep -v '^ *#')
+    [ -n "$block" ]
+    run bash -c '
+        calls=0
+        iptables() { calls=$((calls+1)); (( calls <= 3 )); }   # 3 stale rules, then exhausted
+        ip6tables() { return 1; }
+        CLIENT_ISOLATION=0
+        '"$block"'
+        echo "off:$calls"
+        calls=0
+        CLIENT_ISOLATION=1
+        '"$block"'
+        echo "on:$calls"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'off:4'* ]]   # 3 успешных удаления + 1 финальная неудача
+    [[ "$output" == *'on:0'* ]]    # при включённой изоляции цикл не запускается
+}

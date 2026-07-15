@@ -3400,6 +3400,17 @@ step7_start_service() {
     log "### ШАГ 7: Запуск сервиса и настройка безопасности ###"
 
     log "Включение и запуск awg-quick@awg0..."
+
+    # Переключение изоляции on->off: PostDown нового конфига DROP-правило не
+    # снимет (его там больше нет), а down-фаза restart работает уже с новым
+    # конфигом на диске. Убираем stale-правила явно, циклом - при повторных
+    # прерванных запусках их могло накопиться несколько (issue #178, паттерн
+    # отложенной уборки как у PREV_AWG_PORT в #175).
+    if [[ "${CLIENT_ISOLATION:-1}" -eq 0 ]]; then
+        while iptables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done
+        while ip6tables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done
+    fi
+
     if systemctl is-active --quiet awg-quick@awg0; then
         log "Сервис уже активен — перезапуск для применения конфигурации..."
         systemctl enable awg-quick@awg0 || log_warn "Не удалось enable awg-quick@awg0 — проверьте автозапуск вручную"
