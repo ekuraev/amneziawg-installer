@@ -114,7 +114,7 @@
 
 @test "issue #175/2 reboot: RU/EN safe_load_config whitelists PREV_AWG_PORT in all four copies" {
     for f in awg_common.sh awg_common_en.sh install_amneziawg.sh install_amneziawg_en.sh; do
-        run grep -c '|PREV_AWG_PORT)' "$BATS_TEST_DIRNAME/../$f"
+        run grep -c '|PREV_AWG_PORT' "$BATS_TEST_DIRNAME/../$f"
         [ "$status" -eq 0 ]
         [ "$output" -ge 1 ]
     done

@@ -652,7 +652,7 @@ safe_load_config() {
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
                 AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|NO_CPS|\
-                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6|PREV_AWG_PORT)
+                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6|PREV_AWG_PORT|CLIENT_ISOLATION)
                     export "$key=$value"
                     ;;
             esac
@@ -751,6 +751,60 @@ tunnel_network_cidr() {
     if (( 10#$prefix == 0 )); then mask=0; else mask=$(( (0xFFFFFFFF << (32 - 10#$prefix)) & 0xFFFFFFFF )); fi
     local net=$(( ip & mask ))
     echo "$(( (net >> 24) & 255 )).$(( (net >> 16) & 255 )).$(( (net >> 8) & 255 )).$(( net & 255 ))/${prefix}"
+}
+
+# Явный выбор изоляции клиентов (issue #178). Приоритет:
+# CLI-флаг > сохранённый конфиг > интерактивный вопрос (только первый запуск,
+# без --yes) > 1 (изолированно). Старый конфиг без ключа = 1: до этой фичи
+# split-режимы были изолированы де-факто, поведение сохраняется.
+configure_client_isolation() {
+    case "$CLI_ISOLATION" in
+        on)  CLIENT_ISOLATION=1; log "Изоляция клиентов из CLI: включена." ;;
+        off) CLIENT_ISOLATION=0; log "Изоляция клиентов из CLI: отключена." ;;
+        default)
+            if [[ -n "${CLIENT_ISOLATION:-}" ]]; then
+                log "Изоляция клиентов (из конфига): $( [[ "$CLIENT_ISOLATION" -eq 1 ]] && echo включена || echo отключена )."
+            elif [[ "${config_exists:-0}" -eq 1 ]]; then
+                CLIENT_ISOLATION=1
+                log "Изоляция клиентов: включена (конфиг до v5.20 - прежнее поведение)."
+            elif [[ "$AUTO_YES" -eq 1 ]]; then
+                CLIENT_ISOLATION=1
+                log "Изоляция клиентов: включена (--yes, по умолчанию)."
+            else
+                local r_iso
+                read -rp "Изолировать клиентов VPN друг от друга? [Y/n]: " r_iso < /dev/tty
+                case "$r_iso" in
+                    [nN]*) CLIENT_ISOLATION=0; log "Изоляция клиентов отключена: клиенты будут видеть друг друга внутри VPN." ;;
+                    *)     CLIENT_ISOLATION=1; log "Изоляция клиентов включена." ;;
+                esac
+            fi
+            ;;
+        *) die "Некорректное значение --isolation='$CLI_ISOLATION'. Допустимо: on|off." ;;
+    esac
+    export CLIENT_ISOLATION
+}
+
+# Приводит ALLOWED_IPS в соответствие с CLIENT_ISOLATION (идемпотентно,
+# вызывается на каждом запуске после определения режима маршрутизации).
+# Изоляция ВЫКЛ: сеть туннеля дописывается в список (режимы 2/3; в режиме 1
+# 0.0.0.0/0 уже покрывает её). Изоляция ВКЛ: наш токен убирается из режима 2
+# (round-trip off->on); режим 3 не трогаем - кастомный список принадлежит
+# пользователю, а изоляцию всё равно обеспечивает DROP-правило на сервере.
+_apply_isolation_to_allowed_ips() {
+    local net
+    net=$(tunnel_network_cidr "$AWG_TUNNEL_SUBNET") || return 0
+    local compact=",${ALLOWED_IPS// /},"
+    if [[ "${CLIENT_ISOLATION:-1}" -eq 0 ]]; then
+        [[ "$ALLOWED_IPS_MODE" == "1" ]] && return 0
+        [[ "$compact" == *",${net},"* ]] && return 0
+        ALLOWED_IPS="${ALLOWED_IPS}, ${net}"
+        log "Изоляция отключена: подсеть туннеля ${net} добавлена в AllowedIPs клиентов."
+    elif [[ "$ALLOWED_IPS_MODE" == "2" && "$compact" == *",${net},"* ]]; then
+        compact="${compact/,${net},/,}"
+        compact="${compact#,}"; compact="${compact%,}"
+        ALLOWED_IPS="${compact//,/, }"
+        log "Изоляция включена: подсеть туннеля ${net} убрана из AllowedIPs клиентов."
+    fi
 }
 
 # Guard смены подсети: [Peer]-блоки переносятся при переустановке как есть
@@ -2061,6 +2115,7 @@ initialize_setup() {
     ALLOWED_IPS_MODE="default"
     ALLOWED_IPS=""
     AWG_ENDPOINT=""
+    CLIENT_ISOLATION=""
 
     # Загрузка конфига
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -2089,6 +2144,11 @@ initialize_setup() {
     PREV_AWG_PORT="${PREV_AWG_PORT:-}"
     _cfg_awg_port=""
     if [[ "$config_exists" -eq 1 ]]; then _cfg_awg_port="$AWG_PORT"; fi
+
+    # Прежнее значение изоляции - для предупреждения о смене (issue #178).
+    # Legacy-конфиг без ключа = 1 (изолированно): иначе переход legacy -> --isolation=off не даёт предупреждения о regen.
+    _cfg_client_isolation=""
+    if [[ "$config_exists" -eq 1 ]]; then _cfg_client_isolation="${CLIENT_ISOLATION:-1}"; fi
 
     # Переопределение из CLI
     AWG_PORT=${CLI_PORT:-$AWG_PORT}
@@ -2175,6 +2235,12 @@ initialize_setup() {
     if [[ "$ALLOWED_IPS_MODE" == "default" ]]; then ALLOWED_IPS_MODE=2; fi
     if [[ -z "$ALLOWED_IPS" ]]; then configure_routing_mode; fi
 
+    # Изоляция клиентов (issue #178): выбор + приведение AllowedIPs.
+    # Вызов до validate_cidr_list ниже - дописанная подсеть проходит ту же
+    # обязательную валидацию, что и остальной список.
+    configure_client_isolation
+    _apply_isolation_to_allowed_ips
+
     # Единая обязательная валидация AllowedIPs до сохранения конфига: CLI
     # --route-custom на первом запуске присваивал ALLOWED_IPS без проверки
     # (configure_routing_mode пропускался, т.к. режим уже был 3). Проверяем
@@ -2245,6 +2311,7 @@ export AWG_TUNNEL_SUBNET='${AWG_TUNNEL_SUBNET}'
 export DISABLE_IPV6=${DISABLE_IPV6}
 export ALLOWED_IPS_MODE=${ALLOWED_IPS_MODE}
 export ALLOWED_IPS='${ALLOWED_IPS}'
+export CLIENT_ISOLATION=${CLIENT_ISOLATION:-1}
 export AWG_ENDPOINT='${AWG_ENDPOINT}'
 export AWG_MTU=${AWG_MTU:-1280}
 # AWG 2.0 Parameters
@@ -2299,6 +2366,14 @@ EOF
         log_warn "Режим маршрутизации изменён. Существующие клиентские конфиги сохраняют старые AllowedIPs."
         log_warn "Применить новый режим ко всем клиентам: sudo bash $MANAGE_SCRIPT_PATH regen --reset-routes"
     fi
+    # Смена изоляции - та же операция над клиентскими конфигами, что и смена
+    # режима маршрутизации: новые клиенты получат новый список, существующие -
+    # только через regen --reset-routes (issue #178).
+    if [[ "$config_exists" -eq 1 && -n "$_cfg_client_isolation" \
+          && "$_cfg_client_isolation" != "$CLIENT_ISOLATION" ]]; then
+        log_warn "Режим изоляции клиентов изменён. Существующие клиентские конфиги сохраняют старые AllowedIPs."
+        log_warn "Применить новый режим ко всем клиентам: sudo bash $MANAGE_SCRIPT_PATH regen --reset-routes"
+    fi
     # Смена порта: шаг 6 пропускает уже существующих клиентов, их Endpoint
     # остаётся со старым портом и они молча перестают подключаться. Подсказываем
     # явный перевыпуск - по аналогии с предупреждением о смене режима (#170).
@@ -2333,6 +2408,7 @@ EOF
         || [[ -n "$CLI_ENDPOINT" ]] || [[ "$CLI_DISABLE_IPV6" != "default" ]] \
         || [[ "${CLI_ALLOW_IPV6_TUNNEL:-0}" -eq 1 ]] || [[ -n "${CLI_PRESET:-}" ]] \
         || [[ -n "${CLI_JC:-}" ]] || [[ -n "${CLI_JMIN:-}" ]] || [[ -n "${CLI_JMAX:-}" ]] \
+        || [[ "${CLI_ISOLATION:-default}" != "default" ]] \
         || [[ "${CLI_NO_CPS:-0}" -eq 1 ]]; }; then
         log_warn "Незавершённая установка (шаг $current_step) + CLI-параметры конфигурации: возврат к шагу 4, чтобы firewall и конфиги были перегенерированы с новыми значениями."
         current_step=4
