@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Explicit client isolation setting** (`--isolation=on|off`, an interactive question on first install). Previously isolation was an implicit side effect of the routing mode: split modes isolated clients only because a client had no route to its neighbors, the `0.0.0.0/0` mode did not isolate at all, and dual-stack clients in split modes remained reachable to each other over the tunnel's IPv6 subnet. Now, with isolation enabled (the default), the server honestly blocks traffic between clients (`FORWARD awg0→awg0 DROP`, IPv4 and IPv6) in all modes; with it disabled, the tunnel subnet is added to clients' `AllowedIPs` so devices can see each other. The setting is persisted in `awgsetup_cfg.init` (the `CLIENT_ISOLATION` key) and changed by reinstalling; existing clients need `manage regen --reset-routes` after a change (a hint is printed). Isolation rules are removed by PostDown and cleaned up explicitly on an on→off reinstall (#178)
+
 ## [5.19.2] - 2026-07-15
 
 **v5.19.2** - stale UFW rule cleanup on a port change (contributed by @ekuraev), config regeneration after an interrupted install, and an honest repair-module exit code.

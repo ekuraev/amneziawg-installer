@@ -217,7 +217,7 @@ Detailed comparison: [amneziawg-installer vs the official Amnezia app](https://b
 * Diagnostic report (`--diagnostic`) and full uninstall (`--uninstall`)
 * All actions logged to `/root/awg/`
 * Resume after reboot - the script picks up from where it left off
-* Choice of port, subnet, IPv6 mode, and routing mode. `--endpoint` flag for servers behind NAT
+* Choice of port, subnet, IPv6 mode, routing mode, and client isolation (`--isolation=on|off`). `--endpoint` flag for servers behind NAT
 </details>
 
 ---
@@ -339,6 +339,7 @@ This installation method handles interactive prompts and colored output correctl
     * **Tunnel subnet:** Internal VPN network. Default: `10.9.9.1/24`.
     * **Disable IPv6:** Recommended (`Y`) to prevent traffic leaks.
     * **Routing mode:** Determines which traffic goes through the VPN. Default `2` (Amnezia List + DNS) - recommended for best compatibility and bypassing restrictions.
+    * **Client isolation:** Whether to block traffic between clients inside the VPN. Enabled (`Y`) by default - clients cannot see each other; non-interactive: `--isolation=on|off`.
 
     AWG 2.0 parameters (Jc, S1-S4, H1-H4, I1) are generated **automatically** - no action required.
 
@@ -514,6 +515,8 @@ For a two-server cascade with a split exit for Russian and foreign traffic (spli
 <details>
   <summary><strong>Q: Handshake completes but no traffic flows - what's wrong?</strong></summary>
   <b>A:</b> A common cause is the split-tunneling AllowedIPs gotcha during manual customization. If you want to ping or SSH to the server by its inner tunnel IP (<code>10.9.9.1</code> in the default subnet), add the <b>tunnel subnet</b> (default <code>10.9.9.0/24</code>, or your custom one if you changed <code>--subnet</code>) to the client's <code>AllowedIPs</code>. Otherwise the client does not route traffic to the server even from inside the tunnel. The <code>--route-all</code> mode (full tunnel <code>0.0.0.0/0</code>) covers the subnet automatically; the default <code>--route-amnezia</code> (Amnezia List) and <code>--route-custom=</code> do not, add it explicitly. See <a href="ADVANCED.en.md#allowedips-adv">ADVANCED.en.md → AllowedIPs</a>.
+  <br><br>
+  Separate from the routing mode: by default clients are isolated from each other on the server (a <code>FORWARD awg0→awg0 DROP</code> rule), even if both are in the same mode. To let devices see each other inside the VPN, set <code>--isolation=off</code> at install time - the server drops the block, and the tunnel subnet is added to clients' <code>AllowedIPs</code> automatically. See <a href="ADVANCED.en.md#client-isolation-adv">ADVANCED.en.md → Client Isolation</a>.
 </details>
 
 <details>

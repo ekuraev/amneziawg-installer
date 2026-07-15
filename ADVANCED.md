@@ -14,6 +14,7 @@
   - [Presets (v5.10.0+)](#presets-adv)
 - [⚙️ Детали конфигурации клиента](#config-details-adv)
   - [AllowedIPs](#allowedips-adv)
+  - [Изоляция клиентов](#client-isolation-adv)
   - [IPv6 dual-stack в туннеле (v5.15.0+)](#ipv6-tunnel-adv)
   - [PersistentKeepalive](#persistentkeepalive-adv)
   - [DNS](#dns-adv)
@@ -170,6 +171,23 @@ sudo bash install_amneziawg.sh --jc=2 --jmin=20 --jmax=60 --yes --route-amnezia
     * Пример: `192.168.1.0/24,10.50.0.0/16`
 
 **Калькулятор AllowedIPs:** [WireGuard AllowedIPs Calculator](https://www.procustodibus.com/blog/2021/03/wireguard-allowedips-calculator/).
+
+<a id="client-isolation-adv"></a>
+### Изоляция клиентов
+
+По умолчанию клиенты VPN не видят друг друга: сервер добавляет в `PostUp`/`PostDown` конфига `awg0.conf` правило `iptables -I FORWARD -i awg0 -o awg0 -j DROP` (и симметричное `ip6tables`, если включён IPv6-туннель) - оно рвёт трафик между пирами до общего `ACCEPT`, независимо от режима маршрутизации. До этой настройки изоляция была случайным побочным эффектом режима: split-режимы (2/3) изолировали клиентов только потому, что в их `AllowedIPs` не было маршрута к соседям, `--route-all` не изолировал вовсе, а dual-stack клиенты в split-режимах всё равно оставались достижимы друг для друга по IPv6-подсети туннеля.
+
+**Отключение:** флаг `--isolation=off` при установке (или ответ `n` на интерактивный вопрос «Изолировать клиентов VPN друг от друга?» при первом запуске без `--yes`). DROP-правило не добавляется, а подсеть туннеля дописывается в `AllowedIPs` клиентов (режимы 2/3 - режим 1 с `0.0.0.0/0` уже покрывает её), так что устройства видят друг друга внутри VPN.
+
+**Как переключить на уже установленном сервере:**
+
+```bash
+sudo bash ./install_amneziawg.sh --force --isolation=off   # или --isolation=on
+```
+
+Настройка сохраняется в `awgsetup_cfg.init` (ключ `CLIENT_ISOLATION`). Как и смена режима маршрутизации, смена изоляции переустановкой не трогает уже выпущенные клиентские конфиги - им нужен явный перевыпуск: `sudo bash /root/awg/manage_amneziawg.sh regen --reset-routes` (инсталлятор печатает эту подсказку после переустановки со сменой режима).
+
+**Устаревшие конфиги.** Конфиг без ключа `CLIENT_ISOLATION` (созданный до появления этой настройки) трактуется как изолированный (`1`) - это и есть прежнее поведение split-режимов по умолчанию, никаких сюрпризов при переустановке без `--isolation`.
 
 <a id="ipv6-tunnel-adv"></a>
 ### IPv6 dual-stack в туннеле (v5.15.0+)
@@ -445,6 +463,7 @@ PersistentKeepalive = 33
   --route-all           Режим: Весь трафик (0.0.0.0/0)
   --route-amnezia       Режим: Список Amnezia+DNS (умолч.)
   --route-custom=СЕТИ   Режим: Только указанные сети
+  --isolation=on|off    Изоляция клиентов друг от друга (умолч. on)
   --endpoint=АДРЕС      Внешний endpoint сервера: FQDN, IPv4 или [IPv6] (для NAT)
   --preset=ТИП          Набор параметров обфускации: default, mobile
                         mobile: Jc=3, узкий Jmax — для мобильных операторов (Tele2, Yota, Мегафон)

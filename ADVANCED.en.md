@@ -14,6 +14,7 @@ This is a supplement to the main [README.en.md](README.en.md), containing deeper
   - [Presets (v5.10.0+)](#presets-adv)
 - [⚙️ Client Configuration Details](#config-details-adv)
   - [AllowedIPs](#allowedips-adv)
+  - [Client Isolation](#client-isolation-adv)
   - [IPv6 Dual-Stack Tunnel (v5.15.0+)](#ipv6-tunnel-adv)
   - [PersistentKeepalive](#persistentkeepalive-adv)
   - [DNS](#dns-adv)
@@ -172,6 +173,23 @@ Defines which traffic the **client** routes through the VPN tunnel.
     * Example: `192.168.1.0/24,10.50.0.0/16`
 
 **AllowedIPs Calculator:** [WireGuard AllowedIPs Calculator](https://www.procustodibus.com/blog/2021/03/wireguard-allowedips-calculator/).
+
+<a id="client-isolation-adv"></a>
+### Client Isolation
+
+By default VPN clients cannot see each other: the server adds a rule to `PostUp`/`PostDown` in the `awg0.conf` config, `iptables -I FORWARD -i awg0 -o awg0 -j DROP` (plus a symmetric `ip6tables` rule if the IPv6 tunnel is enabled) - it cuts traffic between peers before the general `ACCEPT`, regardless of the routing mode. Before this setting, isolation was an accidental side effect of the mode: split modes (2/3) isolated clients only because their `AllowedIPs` had no route to their neighbors, `--route-all` did not isolate at all, and dual-stack clients in split modes remained reachable to each other over the tunnel's IPv6 subnet.
+
+**Disabling it:** the `--isolation=off` flag at install time (or answering `n` to the interactive question "Isolate VPN clients from each other?" on first run without `--yes`). The DROP rule is not added, and the tunnel subnet is appended to clients' `AllowedIPs` (modes 2/3 - mode 1 with `0.0.0.0/0` already covers it), so devices can see each other inside the VPN.
+
+**Switching it on an already installed server:**
+
+```bash
+sudo bash ./install_amneziawg_en.sh --force --isolation=off   # or --isolation=on
+```
+
+The setting is persisted in `awgsetup_cfg.init` (the `CLIENT_ISOLATION` key). Just like a routing-mode change, changing isolation via reinstall does not touch already-issued client configs - they need an explicit reissue: `sudo bash /root/awg/manage_amneziawg.sh regen --reset-routes` (the installer prints this hint after a reinstall that changes the mode).
+
+**Legacy configs.** A config without the `CLIENT_ISOLATION` key (created before this setting existed) is treated as isolated (`1`) - that is the previous default behavior of split modes, so there is no surprise on a reinstall without `--isolation`.
 
 <a id="ipv6-tunnel-adv"></a>
 ### IPv6 Dual-Stack Tunnel (v5.15.0+)
@@ -447,6 +465,7 @@ Options:
   --route-all           Mode: All traffic (0.0.0.0/0)
   --route-amnezia       Mode: Amnezia List + DNS (default)
   --route-custom=NETS   Mode: Only specified networks
+  --isolation=on|off    Isolate clients from each other (default on)
   --endpoint=ADDR       External server endpoint: FQDN, IPv4 or [IPv6] (NAT)
   --preset=TYPE         Obfuscation parameter preset: default, mobile
                         mobile: Jc=3, narrow Jmax — for mobile carriers (Tele2, Yota, Megafon)
