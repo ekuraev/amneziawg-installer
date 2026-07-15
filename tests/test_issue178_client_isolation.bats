@@ -129,8 +129,9 @@
         # (a) off + subnet changed: old token removed, new token added, ownership updated
         CLIENT_ISOLATION=0 ALLOWED_IPS_MODE=2 ALLOWED_IPS="1.0.0.0/8, 10.9.8.0/24, 8.8.8.8/32" CLIENT_ISOLATION_NET=10.9.8.0/24
         _apply_isolation_to_allowed_ips; echo "A:$ALLOWED_IPS|NET=$CLIENT_ISOLATION_NET"
-        # (b) on + subnet changed in the same run: both old and new tokens end up absent
-        CLIENT_ISOLATION=1 ALLOWED_IPS_MODE=2 ALLOWED_IPS="1.0.0.0/8, 10.9.8.0/24, 8.8.8.8/32" CLIENT_ISOLATION_NET=10.9.8.0/24
+        # (b) on + subnet changed, current net ALSO present (mode 2): pre-strip removes
+        # the old token AND the on-branch strips the current-net token - both gone
+        CLIENT_ISOLATION=1 ALLOWED_IPS_MODE=2 ALLOWED_IPS="1.0.0.0/8, 10.9.8.0/24, 10.9.9.0/24, 8.8.8.8/32" CLIENT_ISOLATION_NET=10.9.8.0/24
         _apply_isolation_to_allowed_ips; echo "B:$ALLOWED_IPS|NET=$CLIENT_ISOLATION_NET"
         # (c) mode 3 + on, user-owned token (CLIENT_ISOLATION_NET empty): list untouched
         CLIENT_ISOLATION=1 ALLOWED_IPS_MODE=3 ALLOWED_IPS="192.168.50.0/24, 10.9.9.0/24" CLIENT_ISOLATION_NET=""
@@ -138,12 +139,18 @@
         # (d) mode 3 + on, our own token (CLIENT_ISOLATION_NET==net): token removed
         CLIENT_ISOLATION=1 ALLOWED_IPS_MODE=3 ALLOWED_IPS="192.168.50.0/24, 10.9.9.0/24" CLIENT_ISOLATION_NET=10.9.9.0/24
         _apply_isolation_to_allowed_ips; echo "D:$ALLOWED_IPS|NET=$CLIENT_ISOLATION_NET"
+        # (e) off + our token already present (no-op branch): list unchanged AND
+        # ownership SURVIVES - a reset here would re-strand the token on the
+        # next subnet change (regression guard for the ":" branch)
+        CLIENT_ISOLATION=0 ALLOWED_IPS_MODE=2 ALLOWED_IPS="1.0.0.0/8, 10.9.9.0/24" CLIENT_ISOLATION_NET=10.9.9.0/24
+        _apply_isolation_to_allowed_ips; echo "E:$ALLOWED_IPS|NET=$CLIENT_ISOLATION_NET"
     '
     [ "$status" -eq 0 ]
     [[ "$output" == *'A:1.0.0.0/8, 8.8.8.8/32, 10.9.9.0/24|NET=10.9.9.0/24'* ]]
     [[ "$output" == *'B:1.0.0.0/8, 8.8.8.8/32|NET='* ]]
     [[ "$output" == *'C:192.168.50.0/24, 10.9.9.0/24|NET='* ]]
     [[ "$output" == *'D:192.168.50.0/24|NET='* ]]
+    [[ "$output" == *'E:1.0.0.0/8, 10.9.9.0/24|NET=10.9.9.0/24'* ]]
 }
 
 @test "issue #178: RU/EN installer persists CLIENT_ISOLATION_NET into awgsetup_cfg.init" {
