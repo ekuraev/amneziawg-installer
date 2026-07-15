@@ -199,3 +199,18 @@
     [[ "$output" == *'off:4'* ]]   # 3 успешных удаления + 1 финальная неудача
     [[ "$output" == *'on:0'* ]]    # при включённой изоляции цикл не запускается
 }
+
+@test "issue #178: uninstall drains stale isolation DROP rules (RU/EN)" {
+    for f in install_amneziawg.sh install_amneziawg_en.sh; do
+        block=$(awk '/^step_uninstall\(\)/,/^}/' "$BATS_TEST_DIRNAME/../$f")
+        [[ "$block" == *'while iptables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done'* ]]
+        [[ "$block" == *'while ip6tables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done'* ]]
+    done
+}
+
+@test "issue #178: install summary logs the isolation state (RU/EN)" {
+    run grep -c 'Изоляция клиентов: $(' "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
+    [ "$status" -eq 0 ]
+    run grep -c 'Client isolation: $(' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
+    [ "$status" -eq 0 ]
+}

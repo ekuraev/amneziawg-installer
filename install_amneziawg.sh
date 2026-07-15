@@ -1940,6 +1940,11 @@ step_uninstall() {
     fi
     log "Остановка сервиса..."
     systemctl stop awg-quick@awg0 2>/dev/null
+    # Изоляционные DROP-правила (issue #178): PostDown конфига на диске мог
+    # уже не содержать -D DROP (прерванная переустановка on->off между шагами
+    # 6 и 7) - добираем stale-правила явно, как в шаге 7.
+    while iptables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done
+    while ip6tables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done
     systemctl disable awg-quick@awg0 2>/dev/null
     modprobe -r amneziawg 2>/dev/null || true
     # v5.12.0+: автовосстановление модуля при обновлении ядра.
@@ -2358,6 +2363,7 @@ EOF
     log "Подсеть: ${AWG_TUNNEL_SUBNET}"
     log "Откл. IPv6: $DISABLE_IPV6"
     log "Режим AllowedIPs: $ALLOWED_IPS_MODE"
+    log "Изоляция клиентов: $( [[ "${CLIENT_ISOLATION:-1}" -eq 1 ]] && echo включена || echo отключена )"
     # Смена режима маршрутизации - операция над клиентскими конфигами: новые
     # клиенты получат новый список, но у существующих regen сознательно
     # сохраняет AllowedIPs (индивидуальные настройки modify). Подсказываем
@@ -2369,7 +2375,7 @@ EOF
     # Смена изоляции - та же операция над клиентскими конфигами, что и смена
     # режима маршрутизации: новые клиенты получат новый список, существующие -
     # только через regen --reset-routes (issue #178).
-    if [[ "$config_exists" -eq 1 && -n "$_cfg_client_isolation" \
+    if [[ "$config_exists" -eq 1 \
           && "$_cfg_client_isolation" != "$CLIENT_ISOLATION" ]]; then
         log_warn "Режим изоляции клиентов изменён. Существующие клиентские конфиги сохраняют старые AllowedIPs."
         log_warn "Применить новый режим ко всем клиентам: sudo bash $MANAGE_SCRIPT_PATH regen --reset-routes"

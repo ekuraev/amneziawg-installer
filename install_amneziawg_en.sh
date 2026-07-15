@@ -1949,6 +1949,11 @@ step_uninstall() {
     fi
     log "Stopping service..."
     systemctl stop awg-quick@awg0 2>/dev/null
+    # Isolation DROP rules (issue #178): the on-disk config's PostDown may no
+    # longer contain -D DROP (an on->off reinstall interrupted between steps
+    # 6 and 7) - drain stale rules explicitly, same as step 7.
+    while iptables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done
+    while ip6tables -D FORWARD -i awg0 -o awg0 -j DROP 2>/dev/null; do :; done
     systemctl disable awg-quick@awg0 2>/dev/null
     modprobe -r amneziawg 2>/dev/null || true
     # v5.12.0+: kernel module auto-repair on kernel upgrade.
@@ -2372,6 +2377,7 @@ EOF
     log "Subnet: ${AWG_TUNNEL_SUBNET}"
     log "IPv6 disable: $DISABLE_IPV6"
     log "AllowedIPs mode: $ALLOWED_IPS_MODE"
+    log "Client isolation: $( [[ "${CLIENT_ISOLATION:-1}" -eq 1 ]] && echo enabled || echo disabled )"
     # Changing the routing mode is a client-config operation: new clients get
     # the new list, but for existing ones regen deliberately preserves
     # AllowedIPs (per-client modify customizations). Hint the explicit way to
@@ -2383,7 +2389,7 @@ EOF
     # Isolation change - the same operation on client configs as a routing
     # mode change: new clients get the new list, existing ones only via
     # regen --reset-routes (issue #178).
-    if [[ "$config_exists" -eq 1 && -n "$_cfg_client_isolation" \
+    if [[ "$config_exists" -eq 1 \
           && "$_cfg_client_isolation" != "$CLIENT_ISOLATION" ]]; then
         log_warn "Client isolation mode changed. Existing client configs keep their old AllowedIPs."
         log_warn "Apply the new mode to all clients: sudo bash $MANAGE_SCRIPT_PATH regen --reset-routes"
