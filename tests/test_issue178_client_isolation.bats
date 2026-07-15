@@ -260,3 +260,15 @@
     run grep -c 'Client isolation: $(' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
     [ "$status" -eq 0 ]
 }
+
+@test "issue #178: CLI route-mode reset also drops the isolation ownership record (RU/EN)" {
+    for f in install_amneziawg.sh install_amneziawg_en.sh; do
+        # Внутри блока сброса #170 (ALLOWED_IPS="") ownership обязан обнуляться
+        # до пересчёта списка - иначе stale CLIENT_ISOLATION_NET присваивает
+        # себе пользовательский токен из свежего --route-custom.
+        # Проверяем наличие обоих строк в файле в нужном порядке
+        grep -q 'Issue #170' "$BATS_TEST_DIRNAME/../$f"
+        # После ALLOWED_IPS="" должно быть CLIENT_ISOLATION_NET="" в пределах 5 строк
+        grep -A 5 'ALLOWED_IPS=""' "$BATS_TEST_DIRNAME/../$f" | grep -q 'CLIENT_ISOLATION_NET=""'
+    done
+}

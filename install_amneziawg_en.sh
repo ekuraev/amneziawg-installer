@@ -2220,6 +2220,10 @@ initialize_setup() {
         # effect (Issue #170). An empty list forces configure_routing_mode to
         # recompute it for the new mode.
         ALLOWED_IPS=""
+        # Ownership dies with the list it described: otherwise a stale
+        # CLIENT_ISOLATION_NET could claim a user's token from a fresh
+        # --route-custom list (issue #178).
+        CLIENT_ISOLATION_NET=""
         if [[ "$CLI_ROUTING_MODE" -eq 3 ]]; then ALLOWED_IPS=$CLI_CUSTOM_ROUTES; fi
     fi
     if [[ -n "$CLI_ENDPOINT" ]]; then

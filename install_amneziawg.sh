@@ -2206,6 +2206,10 @@ initialize_setup() {
         # из awgsetup_cfg.init - флаг молча не действовал (Issue #170). Пустой
         # список заставит configure_routing_mode пересчитать его под новый режим.
         ALLOWED_IPS=""
+        # Ownership умирает вместе со списком, который он описывал: иначе
+        # stale CLIENT_ISOLATION_NET может присвоить себе токен пользователя
+        # из свежего --route-custom (issue #178).
+        CLIENT_ISOLATION_NET=""
         if [[ "$CLI_ROUTING_MODE" -eq 3 ]]; then ALLOWED_IPS=$CLI_CUSTOM_ROUTES; fi
     fi
     if [[ -n "$CLI_ENDPOINT" ]]; then
