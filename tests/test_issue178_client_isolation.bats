@@ -139,3 +139,30 @@
     run grep -F '_cfg_client_isolation="${CLIENT_ISOLATION:-1}"' "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
     [ "$status" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# Server-side isolation rules
+# ---------------------------------------------------------------------------
+
+@test "issue #178: render_server_config adds isolation DROP to PostUp/PostDown (RU/EN)" {
+    for f in awg_common.sh awg_common_en.sh; do
+        block=$(awk '/^render_server_config\(\)/,/^}/' "$BATS_TEST_DIRNAME/../$f")
+        [[ "$block" == *'iptables -I FORWARD -i %i -o %i -j DROP'* ]]
+        # PostDown guarded: rule may be absent after an on->off reinstall.
+        [[ "$block" == *'iptables -D FORWARD -i %i -o %i -j DROP 2>/dev/null || true'* ]]
+        [[ "$block" == *'ip6tables -I FORWARD -i %i -o %i -j DROP'* ]]
+        [[ "$block" == *'CLIENT_ISOLATION'* ]]
+    done
+}
+
+@test "issue #178: isolation DROP is appended after the ACCEPT insert (ends up above it)" {
+    # PostUp выполняется слева направо; -I вставляет в начало цепочки, поэтому
+    # DROP, идущий В СТРОКЕ ПОЗЖЕ ACCEPT, оказывается В ЦЕПОЧКЕ выше ACCEPT.
+    for f in awg_common.sh awg_common_en.sh; do
+        block=$(awk '/^render_server_config\(\)/,/^}/' "$BATS_TEST_DIRNAME/../$f")
+        accept_first=$(grep -n 'local postup="iptables -I FORWARD -i %i -j ACCEPT' <<<"$block" | head -1 | cut -d: -f1)
+        drop_line=$(grep -n 'postup=.*iptables -I FORWARD -i %i -o %i -j DROP' <<<"$block" | head -1 | cut -d: -f1)
+        [ -n "$accept_first" ] && [ -n "$drop_line" ]
+        [ "$drop_line" -gt "$accept_first" ]
+    done
+}

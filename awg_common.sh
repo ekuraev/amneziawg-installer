@@ -739,7 +739,7 @@ safe_load_config() {
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
                 AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|NO_CPS|\
-                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6|PREV_AWG_PORT)
+                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6|PREV_AWG_PORT|CLIENT_ISOLATION)
                     export "$key=$value"
                     ;;
             esac
@@ -1125,6 +1125,18 @@ render_server_config() {
     postup="${postup}; iptables -t mangle -A FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss ${mss4}; iptables -t mangle -A FORWARD -i %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss ${mss4}"
     postdown="${postdown}; iptables -t mangle -D FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss ${mss4}; iptables -t mangle -D FORWARD -i %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss ${mss4}"
 
+    # Изоляция клиентов (issue #178): DROP awg0->awg0 до общего ACCEPT.
+    # PostUp выполняется слева направо, -I вставляет в начало цепочки -
+    # правило, добавленное В СТРОКЕ ПОЗЖЕ, оказывается В ЦЕПОЧКЕ ВЫШЕ, поэтому
+    # DROP дописывается в конец postup. PostDown с '2>/dev/null || true':
+    # после переустановки on->off правила в running-наборе нет, и упавший -D
+    # не должен ронять awg-quick down (down-фаза restart работает уже с новым
+    # конфигом). Unset CLIENT_ISOLATION = 1: конфиги до v5.20 изолированы.
+    if [[ "${CLIENT_ISOLATION:-1}" -eq 1 ]]; then
+        postup="${postup}; iptables -I FORWARD -i %i -o %i -j DROP"
+        postdown="${postdown}; iptables -D FORWARD -i %i -o %i -j DROP 2>/dev/null || true"
+    fi
+
     # IPv6 правила: при включённом IPv6-туннеле (FORWARD внутри туннеля + MASQUERADE
     # на публичный интерфейс). MASQUERADE безвреден если у VPS нет native IPv6 -
     # это no-op, пока нет IPv6 default route, зато peer-to-peer внутри туннеля работает.
@@ -1134,6 +1146,13 @@ render_server_config() {
     if [[ "${ALLOW_IPV6_TUNNEL:-0}" -eq 1 || "${DISABLE_IPV6:-1}" -eq 0 ]]; then
         postup="${postup}; ip6tables -I FORWARD -i %i -j ACCEPT; ip6tables -t nat -A POSTROUTING -o ${nic} -j MASQUERADE; ip6tables -t mangle -A FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss ${mss6}; ip6tables -t mangle -A FORWARD -i %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss ${mss6}"
         postdown="${postdown}; ip6tables -D FORWARD -i %i -j ACCEPT; ip6tables -t nat -D POSTROUTING -o ${nic} -j MASQUERADE; ip6tables -t mangle -D FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss ${mss6}; ip6tables -t mangle -D FORWARD -i %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss ${mss6}"
+        # Изоляция и для IPv6-туннеля: без DROP dual-stack клиенты в split-
+        # режимах достижимы друг для друга по fddd::/64 (IPV6_SUBNET уже в их
+        # AllowedIPs через render_client_config) - issue #178.
+        if [[ "${ALLOW_IPV6_TUNNEL:-0}" -eq 1 && "${CLIENT_ISOLATION:-1}" -eq 1 ]]; then
+            postup="${postup}; ip6tables -I FORWARD -i %i -o %i -j DROP"
+            postdown="${postdown}; ip6tables -D FORWARD -i %i -o %i -j DROP 2>/dev/null || true"
+        fi
     fi
 
     # Формируем конфиг через временный файл (атомарная запись).
