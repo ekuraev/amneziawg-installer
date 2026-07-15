@@ -43,6 +43,7 @@ _APT_UPDATED=0
 CLI_PORT=""; CLI_SUBNET=""; CLI_DISABLE_IPV6="default"; CLI_SSH_PORT=""
 CLI_ROUTING_MODE="default"; CLI_CUSTOM_ROUTES=""; CLI_ENDPOINT=""; CLI_NO_TWEAKS=0; CLI_NO_CPS=0
 CLI_ALLOW_IPV6_TUNNEL=0
+CLI_ISOLATION="default"
 
 # --- Автоочистка временных файлов ---
 _install_temp_files=()
@@ -85,6 +86,7 @@ while [[ $# -gt 0 ]]; do
         --route-all)     CLI_ROUTING_MODE=1 ;;
         --route-amnezia) CLI_ROUTING_MODE=2 ;;
         --route-custom=*) CLI_ROUTING_MODE=3; CLI_CUSTOM_ROUTES="${1#*=}" ;;
+        --isolation=*)   CLI_ISOLATION="${1#*=}" ;;
         --endpoint=*)    CLI_ENDPOINT="${1#*=}" ;;
         --yes|-y)        AUTO_YES=1 ;;
         --no-tweaks)     NO_TWEAKS=1; CLI_NO_TWEAKS=1 ;;
@@ -287,6 +289,8 @@ show_help() {
   --route-all           Использовать режим 'Весь трафик' неинтерактивно
   --route-amnezia       Использовать режим 'Amnezia' неинтерактивно
   --route-custom=СЕТИ   Использовать режим 'Пользовательский' неинтерактивно
+  --isolation=on|off    Изоляция клиентов VPN друг от друга (по умолчанию on).
+                        off: подсеть туннеля добавляется в AllowedIPs клиентов
   --endpoint=АДРЕС      Внешний endpoint сервера: FQDN, IPv4 или [IPv6] (для NAT)
   -y, --yes             Автоматическое подтверждение (перезагрузки, UFW и т.д.)
   -f, --force           Принудительная переустановка поверх уже работающего AmneziaWG
@@ -727,6 +731,24 @@ validate_subnet() {
     fi
     # Нормализация глобала к <network+1>/<prefix> (сервер = network+1).
     AWG_TUNNEL_SUBNET="${srv}/${prefix}"
+}
+
+# Сеть туннеля из CIDR-строки (<network+1>/<prefix> -> <network>/<prefix>).
+# Нужен изоляции клиентов (issue #178): при отключённой изоляции в AllowedIPs
+# клиентов уходит именно network-адрес. Самодостаточно (шаг 0, ДО загрузки
+# awg_common.sh): не используем _cidr_bounds/_int_to_ipv4.
+tunnel_network_cidr() {
+    local subnet="${1:-$AWG_TUNNEL_SUBNET}"
+    if ! [[ "$subnet" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})/([0-9]{1,2})$ ]]; then
+        return 1
+    fi
+    local a="${BASH_REMATCH[1]}" b="${BASH_REMATCH[2]}" c="${BASH_REMATCH[3]}" d="${BASH_REMATCH[4]}" prefix="${BASH_REMATCH[5]}"
+    (( 10#$prefix <= 32 )) || return 1
+    local ip=$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))
+    local mask
+    if (( 10#$prefix == 0 )); then mask=0; else mask=$(( (0xFFFFFFFF << (32 - 10#$prefix)) & 0xFFFFFFFF )); fi
+    local net=$(( ip & mask ))
+    echo "$(( (net >> 24) & 255 )).$(( (net >> 16) & 255 )).$(( (net >> 8) & 255 )).$(( net & 255 ))/${prefix}"
 }
 
 # Guard смены подсети: [Peer]-блоки переносятся при переустановке как есть
