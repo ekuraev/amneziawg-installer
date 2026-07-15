@@ -114,9 +114,48 @@
     done
 }
 
+# ---------------------------------------------------------------------------
+# Task 8: stale route-token cleanup on tunnel-subnet change (CLIENT_ISOLATION_NET)
+# ---------------------------------------------------------------------------
+
+@test "issue #178 functional: _apply_isolation_to_allowed_ips drops stale CLIENT_ISOLATION_NET on subnet change" {
+    fns=$(awk '/^tunnel_network_cidr\(\)/,/^}/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
+          awk '/^_apply_isolation_to_allowed_ips\(\)/,/^}/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
+    [ -n "$fns" ]
+    run bash -c '
+        log() { :; }
+        '"$fns"'
+        AWG_TUNNEL_SUBNET=10.9.9.1/24
+        # (a) off + subnet changed: old token removed, new token added, ownership updated
+        CLIENT_ISOLATION=0 ALLOWED_IPS_MODE=2 ALLOWED_IPS="1.0.0.0/8, 10.9.8.0/24, 8.8.8.8/32" CLIENT_ISOLATION_NET=10.9.8.0/24
+        _apply_isolation_to_allowed_ips; echo "A:$ALLOWED_IPS|NET=$CLIENT_ISOLATION_NET"
+        # (b) on + subnet changed in the same run: both old and new tokens end up absent
+        CLIENT_ISOLATION=1 ALLOWED_IPS_MODE=2 ALLOWED_IPS="1.0.0.0/8, 10.9.8.0/24, 8.8.8.8/32" CLIENT_ISOLATION_NET=10.9.8.0/24
+        _apply_isolation_to_allowed_ips; echo "B:$ALLOWED_IPS|NET=$CLIENT_ISOLATION_NET"
+        # (c) mode 3 + on, user-owned token (CLIENT_ISOLATION_NET empty): list untouched
+        CLIENT_ISOLATION=1 ALLOWED_IPS_MODE=3 ALLOWED_IPS="192.168.50.0/24, 10.9.9.0/24" CLIENT_ISOLATION_NET=""
+        _apply_isolation_to_allowed_ips; echo "C:$ALLOWED_IPS|NET=$CLIENT_ISOLATION_NET"
+        # (d) mode 3 + on, our own token (CLIENT_ISOLATION_NET==net): token removed
+        CLIENT_ISOLATION=1 ALLOWED_IPS_MODE=3 ALLOWED_IPS="192.168.50.0/24, 10.9.9.0/24" CLIENT_ISOLATION_NET=10.9.9.0/24
+        _apply_isolation_to_allowed_ips; echo "D:$ALLOWED_IPS|NET=$CLIENT_ISOLATION_NET"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'A:1.0.0.0/8, 8.8.8.8/32, 10.9.9.0/24|NET=10.9.9.0/24'* ]]
+    [[ "$output" == *'B:1.0.0.0/8, 8.8.8.8/32|NET='* ]]
+    [[ "$output" == *'C:192.168.50.0/24, 10.9.9.0/24|NET='* ]]
+    [[ "$output" == *'D:192.168.50.0/24|NET='* ]]
+}
+
+@test "issue #178: RU/EN installer persists CLIENT_ISOLATION_NET into awgsetup_cfg.init" {
+    for f in install_amneziawg.sh install_amneziawg_en.sh; do
+        run grep -F "export CLIENT_ISOLATION_NET='\${CLIENT_ISOLATION_NET:-}'" "$BATS_TEST_DIRNAME/../$f"
+        [ "$status" -eq 0 ]
+    done
+}
+
 @test "issue #178: CLIENT_ISOLATION whitelisted in safe_load_config (all four copies)" {
     for f in awg_common.sh awg_common_en.sh install_amneziawg.sh install_amneziawg_en.sh; do
-        run grep -c 'PREV_AWG_PORT|CLIENT_ISOLATION)' "$BATS_TEST_DIRNAME/../$f"
+        run grep -c 'PREV_AWG_PORT|CLIENT_ISOLATION|CLIENT_ISOLATION_NET)' "$BATS_TEST_DIRNAME/../$f"
         [ "$status" -eq 0 ]
         [ "$output" -ge 1 ]
     done

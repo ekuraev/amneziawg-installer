@@ -33,7 +33,7 @@ MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 # Проверяются в step5_download_scripts() после curl.
 # Если AWG_BRANCH переопределён (не v$SCRIPT_VERSION), проверка пропускается.
 # Формат: sha256sum output (hex, 64 chars).
-COMMON_SCRIPT_SHA256="f1ee87fce609baa9b585173af629706368a51fef32069b65d42611f3a69cad0d"
+COMMON_SCRIPT_SHA256="a8000a6e4421b07f4a115a3863122b0baa8bd8dbfc7df7f8203bd0d294ebd0e0"
 MANAGE_SCRIPT_SHA256="ced685738dd4910a393cd573c550e9973a6073f3437ea8021206db18e49e64c0"
 
 # Флаги CLI
@@ -652,7 +652,7 @@ safe_load_config() {
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
                 AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|NO_CPS|\
-                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6|PREV_AWG_PORT|CLIENT_ISOLATION)
+                AWG_APPLY_MODE|ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6|PREV_AWG_PORT|CLIENT_ISOLATION|CLIENT_ISOLATION_NET)
                     export "$key=$value"
                     ;;
             esac
@@ -790,21 +790,53 @@ configure_client_isolation() {
 # 0.0.0.0/0 уже покрывает её). Изоляция ВКЛ: наш токен убирается из режима 2
 # (round-trip off->on); режим 3 не трогаем - кастомный список принадлежит
 # пользователю, а изоляцию всё равно обеспечивает DROP-правило на сервере.
+# CLIENT_ISOLATION_NET хранит ownership нашего токена (пуст, если токен
+# пользовательский или изоляция включена) - нужен, чтобы вычистить прежний
+# маршрут при смене подсети туннеля (issue #178, финальный аудит).
 _apply_isolation_to_allowed_ips() {
     local net
     net=$(tunnel_network_cidr "$AWG_TUNNEL_SUBNET") || return 0
     local compact=",${ALLOWED_IPS// /},"
-    if [[ "${CLIENT_ISOLATION:-1}" -eq 0 ]]; then
-        [[ "$ALLOWED_IPS_MODE" == "1" ]] && return 0
-        [[ "$compact" == *",${net},"* ]] && return 0
-        ALLOWED_IPS="${ALLOWED_IPS}, ${net}"
-        log "Изоляция отключена: подсеть туннеля ${net} добавлена в AllowedIPs клиентов."
-    elif [[ "$ALLOWED_IPS_MODE" == "2" && "$compact" == *",${net},"* ]]; then
-        compact="${compact/,${net},/,}"
-        compact="${compact#,}"; compact="${compact%,}"
-        ALLOWED_IPS="${compact//,/, }"
-        log "Изоляция включена: подсеть туннеля ${net} убрана из AllowedIPs клиентов."
+
+    # Смена подсети туннеля: наш прежний токен (persisted CLIENT_ISOLATION_NET)
+    # отличается от текущей сети - убираем в любом режиме и при любом состоянии
+    # изоляции: токен по конструкции добавлен нами, а не пользователем.
+    if [[ -n "${CLIENT_ISOLATION_NET:-}" && "$CLIENT_ISOLATION_NET" != "$net" ]]; then
+        if [[ "$compact" == *",${CLIENT_ISOLATION_NET},"* ]]; then
+            compact="${compact/,${CLIENT_ISOLATION_NET},/,}"
+            compact="${compact#,}"; compact="${compact%,}"
+            ALLOWED_IPS="${compact//,/, }"
+            log "Смена подсети туннеля: прежний маршрут ${CLIENT_ISOLATION_NET} убран из AllowedIPs клиентов."
+            compact=",${ALLOWED_IPS// /},"
+        fi
+        CLIENT_ISOLATION_NET=""
     fi
+
+    if [[ "${CLIENT_ISOLATION:-1}" -eq 0 ]]; then
+        if [[ "$ALLOWED_IPS_MODE" == "1" ]]; then
+            CLIENT_ISOLATION_NET=""
+        elif [[ "$compact" == *",${net},"* ]]; then
+            # Уже есть: наш прежний (CLIENT_ISOLATION_NET==net сохранён) или
+            # пользовательский (CLIENT_ISOLATION_NET пуст) - ownership не меняем.
+            :
+        else
+            ALLOWED_IPS="${ALLOWED_IPS}, ${net}"
+            CLIENT_ISOLATION_NET="$net"
+            log "Изоляция отключена: подсеть туннеля ${net} добавлена в AllowedIPs клиентов."
+        fi
+    else
+        # Изоляция ВКЛ: режим 2 - токен убираем всегда (список генерируется нами);
+        # режим 3 - только если токен добавили мы (ownership в CLIENT_ISOLATION_NET).
+        if [[ "$compact" == *",${net},"* ]] \
+           && { [[ "$ALLOWED_IPS_MODE" == "2" ]] || [[ "${CLIENT_ISOLATION_NET:-}" == "$net" ]]; }; then
+            compact="${compact/,${net},/,}"
+            compact="${compact#,}"; compact="${compact%,}"
+            ALLOWED_IPS="${compact//,/, }"
+            log "Изоляция включена: подсеть туннеля ${net} убрана из AllowedIPs клиентов."
+        fi
+        CLIENT_ISOLATION_NET=""
+    fi
+    export CLIENT_ISOLATION_NET
 }
 
 # Guard смены подсети: [Peer]-блоки переносятся при переустановке как есть
@@ -2121,6 +2153,7 @@ initialize_setup() {
     ALLOWED_IPS=""
     AWG_ENDPOINT=""
     CLIENT_ISOLATION=""
+    CLIENT_ISOLATION_NET="${CLIENT_ISOLATION_NET:-}"
 
     # Загрузка конфига
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -2317,6 +2350,7 @@ export DISABLE_IPV6=${DISABLE_IPV6}
 export ALLOWED_IPS_MODE=${ALLOWED_IPS_MODE}
 export ALLOWED_IPS='${ALLOWED_IPS}'
 export CLIENT_ISOLATION=${CLIENT_ISOLATION:-1}
+export CLIENT_ISOLATION_NET='${CLIENT_ISOLATION_NET:-}'
 export AWG_ENDPOINT='${AWG_ENDPOINT}'
 export AWG_MTU=${AWG_MTU:-1280}
 # AWG 2.0 Parameters
