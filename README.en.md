@@ -650,6 +650,13 @@ For a two-server cascade with a split exit for Russian and foreign traffic (spli
 | [AWG Manager](https://github.com/hoaxisr/awg-manager) | Keenetic (Entware) | Web UI for managing AWG tunnels on Keenetic routers |
 | [AmneziaWG for Merlin](https://github.com/r0otx/asuswrt-merlin-amneziawg) | ASUS (Asuswrt-Merlin) | AWG 2.0 addon with web UI, GeoIP/GeoSite routing |
 
+### Server Management
+
+| Project | Platform | Description |
+|---------|----------|-------------|
+| [amneziawg-manager](https://github.com/rockysys/amneziawg-manager) | macOS | Native GUI that drives the server over SSH via the bundled manage script - no web panel or daemons |
+| [awgram](https://github.com/ekuraev/awgram) | Telegram | Rust bot: add/remove clients, stats, backup - via the bundled manage script |
+
 <a id="featured-in"></a>
 <details>
 <summary><strong>📰 Featured in</strong></summary>
