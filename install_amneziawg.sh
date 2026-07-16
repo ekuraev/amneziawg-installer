@@ -796,14 +796,21 @@ configure_client_isolation() {
 _apply_isolation_to_allowed_ips() {
     local net
     net=$(tunnel_network_cidr "$AWG_TUNNEL_SUBNET") || return 0
-    local compact=",${ALLOWED_IPS// /},"
+    # Убираем ВЕСЬ whitespace, не только пробелы: validate_cidr_list принимает
+    # табы как разделители, и токен с табом иначе не распознавался бы pattern-
+    # матчем ниже - задваивание вместо no-op (ревью PR #179).
+    local compact=",${ALLOWED_IPS//[[:space:]]/},"
 
     # Смена подсети туннеля: наш прежний токен (persisted CLIENT_ISOLATION_NET)
     # отличается от текущей сети - убираем в любом режиме и при любом состоянии
     # изоляции: токен по конструкции добавлен нами, а не пользователем.
     if [[ -n "${CLIENT_ISOLATION_NET:-}" && "$CLIENT_ISOLATION_NET" != "$net" ]]; then
         if [[ "$compact" == *",${CLIENT_ISOLATION_NET},"* ]]; then
-            compact="${compact/,${CLIENT_ISOLATION_NET},/,}"
+            # Цикл, а не одиночный replace: в испорченном списке токен может
+            # встречаться несколько раз - вычищаем все копии (ревью PR #179).
+            while [[ "$compact" == *",${CLIENT_ISOLATION_NET},"* ]]; do
+                compact="${compact/,${CLIENT_ISOLATION_NET},/,}"
+            done
             compact="${compact#,}"; compact="${compact%,}"
             ALLOWED_IPS="${compact//,/, }"
             log "Смена подсети туннеля: прежний маршрут ${CLIENT_ISOLATION_NET} убран из AllowedIPs клиентов."
@@ -829,7 +836,9 @@ _apply_isolation_to_allowed_ips() {
         # режим 3 - только если токен добавили мы (ownership в CLIENT_ISOLATION_NET).
         if [[ "$compact" == *",${net},"* ]] \
            && { [[ "$ALLOWED_IPS_MODE" == "2" ]] || [[ "${CLIENT_ISOLATION_NET:-}" == "$net" ]]; }; then
-            compact="${compact/,${net},/,}"
+            while [[ "$compact" == *",${net},"* ]]; do
+                compact="${compact/,${net},/,}"
+            done
             compact="${compact#,}"; compact="${compact%,}"
             ALLOWED_IPS="${compact//,/, }"
             log "Изоляция включена: подсеть туннеля ${net} убрана из AllowedIPs клиентов."
@@ -2153,7 +2162,10 @@ initialize_setup() {
     ALLOWED_IPS=""
     AWG_ENDPOINT=""
     CLIENT_ISOLATION=""
-    CLIENT_ISOLATION_NET="${CLIENT_ISOLATION_NET:-}"
+    # Жёсткий сброс (не ${VAR:-}): внутренний ownership-маркер не должен
+    # наследоваться из окружения - экспортированная снаружи переменная иначе
+    # дотянется до удаления маршрутов из AllowedIPs (ревью PR #179).
+    CLIENT_ISOLATION_NET=""
 
     # Загрузка конфига
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -2167,6 +2179,26 @@ initialize_setup() {
         ALLOWED_IPS_MODE=${ALLOWED_IPS_MODE:-"default"}
         ALLOWED_IPS=${ALLOWED_IPS:-""}
         AWG_ENDPOINT=${AWG_ENDPOINT:-""}
+        # CLIENT_ISOLATION из конфига: строго 0|1 (whitelist-парсер значения не
+        # проверяет, а конфиг правят руками). Иначе арифметический контекст
+        # [[ "on" -eq 1 ]] разыменует строку как пустую переменную (=0) и молча
+        # ИНВЕРТИРУЕТ security-настройку: написал on - получил off (ревью PR #179).
+        case "${CLIENT_ISOLATION:-}" in
+            ""|0|1) : ;;
+            *)
+                log_warn "CLIENT_ISOLATION='$CLIENT_ISOLATION' в $CONFIG_FILE не валиден (допустимо 0|1) - включаю изоляцию (безопасный дефолт)."
+                CLIENT_ISOLATION=1
+                ;;
+        esac
+        # CLIENT_ISOLATION_NET - внутренний ownership-маркер: ровно один
+        # канонический IPv4 CIDR (вывод tunnel_network_cidr). Мусор с запятыми
+        # в substring-замене _apply_isolation_to_allowed_ips съел бы соседние
+        # пользовательские маршруты одной заменой (ревью PR #179).
+        if [[ -n "${CLIENT_ISOLATION_NET:-}" ]] \
+           && [[ "$(tunnel_network_cidr "$CLIENT_ISOLATION_NET" || true)" != "$CLIENT_ISOLATION_NET" ]]; then
+            log_warn "CLIENT_ISOLATION_NET='$CLIENT_ISOLATION_NET' в $CONFIG_FILE не валиден (ожидается один канонический CIDR) - сбрасываю."
+            CLIENT_ISOLATION_NET=""
+        fi
         log "Настройки из файла загружены."
     else
         log "Файл конфигурации $CONFIG_FILE не найден."

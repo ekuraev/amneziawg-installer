@@ -803,7 +803,10 @@ configure_client_isolation() {
 _apply_isolation_to_allowed_ips() {
     local net
     net=$(tunnel_network_cidr "$AWG_TUNNEL_SUBNET") || return 0
-    local compact=",${ALLOWED_IPS// /},"
+    # Strip ALL whitespace, not just spaces: validate_cidr_list accepts tabs
+    # as separators, and a tab-carrying token would otherwise slip past the
+    # pattern match below - duplicating instead of a no-op (PR #179 review).
+    local compact=",${ALLOWED_IPS//[[:space:]]/},"
 
     # Tunnel subnet changed: our previous token (persisted CLIENT_ISOLATION_NET)
     # differs from the current network - remove it in any mode and regardless
@@ -811,7 +814,11 @@ _apply_isolation_to_allowed_ips() {
     # the user.
     if [[ -n "${CLIENT_ISOLATION_NET:-}" && "$CLIENT_ISOLATION_NET" != "$net" ]]; then
         if [[ "$compact" == *",${CLIENT_ISOLATION_NET},"* ]]; then
-            compact="${compact/,${CLIENT_ISOLATION_NET},/,}"
+            # A loop, not a single replace: a corrupted list may carry the
+            # token more than once - purge every copy (PR #179 review).
+            while [[ "$compact" == *",${CLIENT_ISOLATION_NET},"* ]]; do
+                compact="${compact/,${CLIENT_ISOLATION_NET},/,}"
+            done
             compact="${compact#,}"; compact="${compact%,}"
             ALLOWED_IPS="${compact//,/, }"
             log "Tunnel subnet changed: previous route ${CLIENT_ISOLATION_NET} removed from client AllowedIPs."
@@ -838,7 +845,9 @@ _apply_isolation_to_allowed_ips() {
         # tracked in CLIENT_ISOLATION_NET).
         if [[ "$compact" == *",${net},"* ]] \
            && { [[ "$ALLOWED_IPS_MODE" == "2" ]] || [[ "${CLIENT_ISOLATION_NET:-}" == "$net" ]]; }; then
-            compact="${compact/,${net},/,}"
+            while [[ "$compact" == *",${net},"* ]]; do
+                compact="${compact/,${net},/,}"
+            done
             compact="${compact#,}"; compact="${compact%,}"
             ALLOWED_IPS="${compact//,/, }"
             log "Isolation enabled: tunnel subnet ${net} removed from client AllowedIPs."
@@ -2165,7 +2174,10 @@ initialize_setup() {
     ALLOWED_IPS=""
     AWG_ENDPOINT=""
     CLIENT_ISOLATION=""
-    CLIENT_ISOLATION_NET="${CLIENT_ISOLATION_NET:-}"
+    # Hard reset (not ${VAR:-}): the internal ownership marker must not be
+    # inherited from the environment - an externally exported variable would
+    # otherwise reach the AllowedIPs route removal (PR #179 review).
+    CLIENT_ISOLATION_NET=""
 
     # Load config
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -2179,6 +2191,28 @@ initialize_setup() {
         ALLOWED_IPS_MODE=${ALLOWED_IPS_MODE:-"default"}
         ALLOWED_IPS=${ALLOWED_IPS:-""}
         AWG_ENDPOINT=${AWG_ENDPOINT:-""}
+        # CLIENT_ISOLATION from the config: strictly 0|1 (the whitelist parser
+        # does not check values, and configs get edited by hand). Otherwise the
+        # arithmetic context [[ "on" -eq 1 ]] dereferences the string as an
+        # empty variable (=0) and silently INVERTS the security setting: wrote
+        # on - got off (PR #179 review).
+        case "${CLIENT_ISOLATION:-}" in
+            ""|0|1) : ;;
+            *)
+                log_warn "CLIENT_ISOLATION='$CLIENT_ISOLATION' in $CONFIG_FILE is invalid (0|1 allowed) - enabling isolation (safe default)."
+                CLIENT_ISOLATION=1
+                ;;
+        esac
+        # CLIENT_ISOLATION_NET is an internal ownership marker: exactly one
+        # canonical IPv4 CIDR (tunnel_network_cidr output). Comma-carrying
+        # garbage would let the substring replace in
+        # _apply_isolation_to_allowed_ips eat adjacent user routes in a single
+        # substitution (PR #179 review).
+        if [[ -n "${CLIENT_ISOLATION_NET:-}" ]] \
+           && [[ "$(tunnel_network_cidr "$CLIENT_ISOLATION_NET" || true)" != "$CLIENT_ISOLATION_NET" ]]; then
+            log_warn "CLIENT_ISOLATION_NET='$CLIENT_ISOLATION_NET' in $CONFIG_FILE is invalid (a single canonical CIDR expected) - resetting."
+            CLIENT_ISOLATION_NET=""
+        fi
         log "Settings loaded from file."
     else
         log "Configuration file $CONFIG_FILE not found."

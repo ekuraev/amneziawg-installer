@@ -261,6 +261,151 @@
     [ "$status" -eq 0 ]
 }
 
+# ---------------------------------------------------------------------------
+# PR #179 review: config values are untrusted - validate after safe_load_config
+# ---------------------------------------------------------------------------
+
+@test "issue #178 functional: CLIENT_ISOLATION from config is normalized to 0|1 (garbage -> warn + 1)" {
+    # 'on' в арифметике [[ "on" -eq 1 ]] разыменуется как пустая переменная (=0)
+    # и молча инвертирует настройку - мусор обязан нормализоваться с warn.
+    block=$(awk '/CLIENT_ISOLATION из конфига/,/esac/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
+    [ -n "$block" ]
+    run bash -c '
+        warns=0
+        log_warn() { warns=$((warns+1)); }
+        CONFIG_FILE=/dev/null
+        for v in on off yes 2 " " "0 1"; do
+            CLIENT_ISOLATION="$v"
+            '"$block"'
+            echo "v=${v}:${CLIENT_ISOLATION}"
+        done
+        echo "warns:$warns"
+        warns=0
+        for v in "" 0 1; do
+            CLIENT_ISOLATION="$v"
+            '"$block"'
+            echo "ok=${v}:${CLIENT_ISOLATION}"
+        done
+        echo "okwarns:$warns"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'v=on:1'* ]]
+    [[ "$output" == *'v=off:1'* ]]
+    [[ "$output" == *'v=2:1'* ]]
+    [[ "$output" == *'warns:6'* ]]      # каждый мусорный вариант дал warn
+    [[ "$output" == *'ok=:'* ]]         # пусто остаётся пустым (нет ключа в конфиге)
+    [[ "$output" == *'ok=0:0'* ]]
+    [[ "$output" == *'ok=1:1'* ]]
+    [[ "$output" == *'okwarns:0'* ]]    # валидные значения проходят молча
+}
+
+@test "issue #178 functional: CLIENT_ISOLATION_NET from config must be a single canonical CIDR" {
+    # Значение с запятыми в substring-замене _apply_isolation_to_allowed_ips
+    # съело бы соседние пользовательские маршруты одной заменой.
+    fns=$(awk '/^tunnel_network_cidr\(\)/,/^}/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
+    block=$(awk '/ownership-маркер: ровно один/,/^        fi$/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
+    [ -n "$fns" ] && [ -n "$block" ]
+    run bash -c '
+        warns=0
+        log_warn() { warns=$((warns+1)); }
+        CONFIG_FILE=/dev/null
+        '"$fns"'
+        for v in "1.0.0.0/8,8.0.0.0/8" "10.9.9.1/24" "not-a-cidr" "10.9.9.0/24 8.0.0.0/8"; do
+            CLIENT_ISOLATION_NET="$v"
+            '"$block"'
+            echo "bad=${v}:<${CLIENT_ISOLATION_NET}>"
+        done
+        echo "warns:$warns"
+        warns=0
+        for v in "" "10.9.9.0/24" "10.9.0.0/16"; do
+            CLIENT_ISOLATION_NET="$v"
+            '"$block"'
+            echo "ok=${v}:<${CLIENT_ISOLATION_NET}>"
+        done
+        echo "okwarns:$warns"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'bad=1.0.0.0/8,8.0.0.0/8:<>'* ]]
+    [[ "$output" == *'bad=10.9.9.1/24:<>'* ]]        # не канонический (не network-адрес)
+    [[ "$output" == *'bad=not-a-cidr:<>'* ]]
+    [[ "$output" == *'warns:4'* ]]
+    [[ "$output" == *'ok=:<>'* ]]
+    [[ "$output" == *'ok=10.9.9.0/24:<10.9.9.0/24>'* ]]
+    [[ "$output" == *'ok=10.9.0.0/16:<10.9.0.0/16>'* ]]
+    [[ "$output" == *'okwarns:0'* ]]
+}
+
+@test "issue #178: initialize_setup hard-resets CLIENT_ISOLATION_NET (no env inheritance, RU/EN)" {
+    for f in install_amneziawg.sh install_amneziawg_en.sh; do
+        block=$(awk '/^initialize_setup\(\)/,/^}/' "$BATS_TEST_DIRNAME/../$f")
+        # Наследование из окружения запрещено: экспортированная снаружи
+        # переменная иначе дотянется до удаления маршрутов из AllowedIPs.
+        [[ "$block" != *'CLIENT_ISOLATION_NET="${CLIENT_ISOLATION_NET:-}"'* ]]
+    done
+}
+
+@test "issue #178: config-load validation for CLIENT_ISOLATION/_NET present in RU/EN" {
+    for f in install_amneziawg.sh install_amneziawg_en.sh; do
+        block=$(awk '/^initialize_setup\(\)/,/^}/' "$BATS_TEST_DIRNAME/../$f")
+        [[ "$block" == *'case "${CLIENT_ISOLATION:-}" in'* ]]
+        [[ "$block" == *'""|0|1)'* ]]
+        [[ "$block" == *'tunnel_network_cidr "$CLIENT_ISOLATION_NET"'* ]]
+    done
+}
+
+@test "issue #178 functional: duplicated tokens in a corrupted ALLOWED_IPS are all removed" {
+    fns=$(awk '/^tunnel_network_cidr\(\)/,/^}/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
+          awk '/^_apply_isolation_to_allowed_ips\(\)/,/^}/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
+    [ -n "$fns" ]
+    run bash -c '
+        log() { :; }
+        '"$fns"'
+        AWG_TUNNEL_SUBNET=10.9.9.1/24
+        # on + mode 2: обе копии текущего токена вычищаются
+        CLIENT_ISOLATION=1 ALLOWED_IPS_MODE=2 ALLOWED_IPS="1.0.0.0/8, 10.9.9.0/24, 10.9.9.0/24, 8.8.8.8/32"
+        _apply_isolation_to_allowed_ips; echo "A:$ALLOWED_IPS"
+        # смена подсети: обе копии прежнего токена вычищаются
+        CLIENT_ISOLATION=1 ALLOWED_IPS_MODE=2 ALLOWED_IPS="10.9.8.0/24, 1.0.0.0/8, 10.9.8.0/24" CLIENT_ISOLATION_NET=10.9.8.0/24
+        _apply_isolation_to_allowed_ips; echo "B:$ALLOWED_IPS|NET=$CLIENT_ISOLATION_NET"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'A:1.0.0.0/8, 8.8.8.8/32'* ]]
+    [[ "$output" == *'B:1.0.0.0/8|NET='* ]]
+}
+
+@test "issue #178 functional: tab-separated ALLOWED_IPS token is still recognized" {
+    # validate_cidr_list принимает табы как разделители - compact-нормализация
+    # обязана их убирать, иначе токен с табом не матчится и задваивается.
+    fns=$(awk '/^tunnel_network_cidr\(\)/,/^}/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
+          awk '/^_apply_isolation_to_allowed_ips\(\)/,/^}/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
+    [ -n "$fns" ]
+    run bash -c '
+        log() { :; }
+        '"$fns"'
+        AWG_TUNNEL_SUBNET=10.9.9.1/24
+        # off + mode 2: токен уже есть (за табом) - повторное добавление запрещено
+        CLIENT_ISOLATION=0 ALLOWED_IPS_MODE=2 ALLOWED_IPS=$'"'"'1.0.0.0/8,\t10.9.9.0/24'"'"'
+        _apply_isolation_to_allowed_ips; echo "A:$ALLOWED_IPS"
+        # on + mode 2: токен за табом распознаётся и убирается
+        CLIENT_ISOLATION=1 ALLOWED_IPS_MODE=2 ALLOWED_IPS=$'"'"'1.0.0.0/8,\t10.9.9.0/24, 8.8.8.8/32'"'"'
+        _apply_isolation_to_allowed_ips; echo "B:$ALLOWED_IPS"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *$'A:1.0.0.0/8,\t10.9.9.0/24'* ]]   # ничего не добавлено
+    [[ "$output" == *'B:1.0.0.0/8, 8.8.8.8/32'* ]]
+}
+
+@test "issue #178: render PostUp drains stale DROP copies before -I (RU/EN)" {
+    # После сбойного -D в PostDown копия DROP копилась бы с каждым up. Дренаж,
+    # а не -C: stale-копия лежит ниже свежего ACCEPT, -C пропустил бы вставку
+    # и awg0->awg0 трафик ушёл бы в ACCEPT (изоляция молча сломана).
+    for f in awg_common.sh awg_common_en.sh; do
+        block=$(awk '/^render_server_config\(\)/,/^}/' "$BATS_TEST_DIRNAME/../$f")
+        [[ "$block" == *'while iptables -D FORWARD -i %i -o %i -j DROP 2>/dev/null; do :; done; iptables -I FORWARD -i %i -o %i -j DROP'* ]]
+        [[ "$block" == *'while ip6tables -D FORWARD -i %i -o %i -j DROP 2>/dev/null; do :; done; ip6tables -I FORWARD -i %i -o %i -j DROP'* ]]
+    done
+}
+
 @test "issue #178: CLI route-mode reset also drops the isolation ownership record (RU/EN)" {
     for f in install_amneziawg.sh install_amneziawg_en.sh; do
         # Внутри блока сброса #170 (ALLOWED_IPS="") ownership обязан обнуляться
