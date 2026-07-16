@@ -1128,12 +1128,17 @@ render_server_config() {
     # Изоляция клиентов (issue #178): DROP awg0->awg0 до общего ACCEPT.
     # PostUp выполняется слева направо, -I вставляет в начало цепочки -
     # правило, добавленное В СТРОКЕ ПОЗЖЕ, оказывается В ЦЕПОЧКЕ ВЫШЕ, поэтому
-    # DROP дописывается в конец postup. PostDown с '2>/dev/null || true':
-    # после переустановки on->off правила в running-наборе нет, и упавший -D
-    # не должен ронять awg-quick down (down-фаза restart работает уже с новым
-    # конфигом). Unset CLIENT_ISOLATION = 1: конфиги до v5.20 изолированы.
+    # DROP дописывается в конец postup. Перед -I дренируем stale-копии циклом
+    # -D: после сбойного PostDown копия DROP иначе копилась бы с каждым up
+    # (ревью PR #179). Именно drain, а не -C: stale-копия к этому моменту
+    # лежит НИЖЕ свежевставленного ACCEPT, -C нашёл бы её, пропустил вставку -
+    # и awg0->awg0 трафик уходил бы в ACCEPT (изоляция молча сломана).
+    # PostDown с '2>/dev/null || true': после переустановки on->off правила в
+    # running-наборе нет, и упавший -D не должен ронять awg-quick down
+    # (down-фаза restart работает уже с новым конфигом). Unset
+    # CLIENT_ISOLATION = 1: конфиги до v5.20 изолированы.
     if [[ "${CLIENT_ISOLATION:-1}" -eq 1 ]]; then
-        postup="${postup}; iptables -I FORWARD -i %i -o %i -j DROP"
+        postup="${postup}; while iptables -D FORWARD -i %i -o %i -j DROP 2>/dev/null; do :; done; iptables -I FORWARD -i %i -o %i -j DROP"
         postdown="${postdown}; iptables -D FORWARD -i %i -o %i -j DROP 2>/dev/null || true"
     fi
 
@@ -1150,7 +1155,7 @@ render_server_config() {
         # режимах достижимы друг для друга по fddd::/64 (IPV6_SUBNET уже в их
         # AllowedIPs через render_client_config) - issue #178.
         if [[ "${ALLOW_IPV6_TUNNEL:-0}" -eq 1 && "${CLIENT_ISOLATION:-1}" -eq 1 ]]; then
-            postup="${postup}; ip6tables -I FORWARD -i %i -o %i -j DROP"
+            postup="${postup}; while ip6tables -D FORWARD -i %i -o %i -j DROP 2>/dev/null; do :; done; ip6tables -I FORWARD -i %i -o %i -j DROP"
             postdown="${postdown}; ip6tables -D FORWARD -i %i -o %i -j DROP 2>/dev/null || true"
         fi
     fi

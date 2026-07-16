@@ -1136,13 +1136,18 @@ render_server_config() {
     # Client isolation (issue #178): DROP awg0->awg0 before the general ACCEPT.
     # PostUp runs left to right, -I inserts at the head of the chain - so a
     # rule added ON A LATER LINE ends up HIGHER IN THE CHAIN, which is why the
-    # DROP is appended at the end of postup. PostDown uses '2>/dev/null || true':
+    # DROP is appended at the end of postup. Before -I we drain stale copies
+    # with a -D loop: after a failed PostDown a DROP copy would otherwise pile
+    # up on every up (PR #179 review). A drain, deliberately not -C: by this
+    # point the stale copy sits BELOW the freshly inserted ACCEPT, -C would
+    # find it, skip the insert - and awg0->awg0 traffic would hit ACCEPT
+    # (isolation silently broken). PostDown uses '2>/dev/null || true':
     # after an on->off reinstall the rule is not in the running set, and a
     # failing -D must not fail awg-quick down (the down phase of restart already
     # runs against the new config). Unset CLIENT_ISOLATION = 1: configs from
     # before v5.20 are isolated.
     if [[ "${CLIENT_ISOLATION:-1}" -eq 1 ]]; then
-        postup="${postup}; iptables -I FORWARD -i %i -o %i -j DROP"
+        postup="${postup}; while iptables -D FORWARD -i %i -o %i -j DROP 2>/dev/null; do :; done; iptables -I FORWARD -i %i -o %i -j DROP"
         postdown="${postdown}; iptables -D FORWARD -i %i -o %i -j DROP 2>/dev/null || true"
     fi
 
@@ -1161,7 +1166,7 @@ render_server_config() {
         # (IPV6_SUBNET is already in their AllowedIPs via render_client_config)
         # - issue #178.
         if [[ "${ALLOW_IPV6_TUNNEL:-0}" -eq 1 && "${CLIENT_ISOLATION:-1}" -eq 1 ]]; then
-            postup="${postup}; ip6tables -I FORWARD -i %i -o %i -j DROP"
+            postup="${postup}; while ip6tables -D FORWARD -i %i -o %i -j DROP 2>/dev/null; do :; done; ip6tables -I FORWARD -i %i -o %i -j DROP"
             postdown="${postdown}; ip6tables -D FORWARD -i %i -o %i -j DROP 2>/dev/null || true"
         fi
     fi
